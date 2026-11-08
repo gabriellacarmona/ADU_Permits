@@ -32,7 +32,9 @@ library(scales)
 # Color coding used throughout: Okabe-Ito colorblind-safe pair
 col_completed   <- "#0072B2"  # blue
 col_in_progress <- "#D55E00"  # vermillion
-pal_outcome <- c("Completed" = col_completed, "In progress" = col_in_progress)
+col_stalled     <- "#767676"  # grey - permits with no status activity in 3+ years
+pal_outcome <- c("Completed" = col_completed, "In progress" = col_in_progress,
+                 "Stalled (3+ yrs inactive)" = col_stalled)
 theme_set(theme_minimal(base_size = 12))
 ```
 
@@ -45,9 +47,9 @@ November 7, 2026). Each row is one issued permit. The variables I rely on:
 | Variable | What it is | How I use it |
 |---|---|---|
 | `PERMIT_NBR` | 15-digit permit number, `XXXXX-YYYYY-NNNNN`. Supplemental permits (plan revisions on the same job) increment the middle group: `-20000` → `-20001`, `-20002`, … | Grouping supplements with their parent permit |
-| `ADU_CHANGED`, `JUNIOR_ADU` | **Net change** in ADU / Junior ADU units on the structural inventory — not 0/1 flags. Mostly +1; legitimately 2–43 for multifamily conversions; negative for removals, demolitions, and corrections. Populated **only from 2017 onward**, which is why the series starts in 2017. | Identifying ADU permits and counting units |
+| `ADU_CHANGED`, `JUNIOR_ADU` | **Net change** in ADU / Junior ADU units on the structural inventory — not 0/1 flags. Mostly +1; legitimately 2–43 for multifamily conversions; negative for removals, demolitions, and corrections. Populated **only from 2017 onward**, and coverage ramps in during 2017 — Step 1b recovers permits the flag misses. | Identifying ADU permits and counting units |
 | `COFO_DATE` | Certificate of Occupancy date. Filled for essentially all `CofO Issued` permits and almost nothing else | Completion demarcation (with `STATUS_DESC`) |
-| `STATUS_DESC` | Current permit status (CofO Issued, Issued, Permit Finaled, Permit Expired, …) | Validity and completion |
+| `STATUS_DESC`, `STATUS_DATE` | Current permit status (CofO Issued, Issued, Permit Finaled, Permit Expired, …) and its date | Validity, completion, and the stalled (3+ yrs inactive) flag |
 | `ISSUE_DATE` | Date the permit was issued | Year assignment |
 | `CPA` | Community Plan Area | Geography (normalized in Step 6) |
 | `PIN_NBR` | Parcel identification number | Property-level collapse |
@@ -61,7 +63,7 @@ never issued, and unpermitted ADUs, are absent; (2) 2026 is a **partial year** (
 ```{r load}
 keep_cols <- c("PERMIT_NBR","PIN_NBR","APN","CPA","PERMIT_TYPE","USE_DESC",
                "ISSUE_DATE","COFO_DATE","ADU_CHANGED","JUNIOR_ADU",
-               "STATUS_DESC","WORK_DESC","LAT","LON")
+               "STATUS_DESC","STATUS_DATE","WORK_DESC","LAT","LON")
 raw <- bind_rows(
   read_csv(params$path_2010s, col_select = all_of(keep_cols),
            col_types = cols(.default = col_character())),
@@ -91,9 +93,59 @@ adu_rows <- raw %>%
          cofo_dt   = mdy(COFO_DATE)) %>%
   filter(units_row != 0)
 
-log_tbl <- add_row(log_tbl, step = "1. Rows where ADU_CHANGED + JUNIOR_ADU nets ≠ 0",
+log_tbl <- add_row(log_tbl, step = "1. Rows where ADU_CHANGED + JUNIOR_ADU nets != 0",
                    remaining = nrow(adu_rows),
                    dropped = log_tbl$remaining[nrow(log_tbl)] - nrow(adu_rows))
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+## Step 1b — Recover ADU permits the inventory flag misses
+
+The `ADU_CHANGED` field was introduced in 2017 and its coverage ramps in: an audit
+against `USE_DESC` and work descriptions shows only ~61% of 2017 permits with
+`USE_DESC = "Accessory Dwelling Unit"` carry the flag, versus ~80% from 2018 on. To
+avoid undercounting (worst in 2017, by roughly a fifth), I add a **secondary
+identification rule**: original (non-supplemental) building permits, issued 2017+, whose
+LADBS use type is Accessory/Junior Accessory Dwelling Unit and whose work description
+contains construction language, and whose permit chain carries no ADU flag anywhere.
+These enter as one-unit projects (the flag that would give an exact count is the thing
+that's missing; nearly all are single-ADU garage conversions and new builds, many citing
+AB 2299/SB 1069).
+
+```{r step1b}
+parse_root <- function(pn) {
+  m <- str_match(pn, "^(\\d{5})-(\\d{5})-(\\d{5})$")
+  mid <- as.integer(m[, 3])
+  paste0(m[, 2], "-", sprintf("%05d", (mid %/% 10000) * 10000), "-", m[, 4])
+}
+
+raw2 <- raw %>%
+  mutate(across(c(ADU_CHANGED, JUNIOR_ADU), ~replace_na(as.numeric(.x), 0)),
+         units_row = ADU_CHANGED + JUNIOR_ADU,
+         issue_dt  = mdy(ISSUE_DATE),
+         cofo_dt   = mdy(COFO_DATE),
+         status_dt = mdy(STATUS_DATE),
+         mid       = as.integer(str_sub(PERMIT_NBR, 7, 11)),
+         is_suppl  = mid %% 10000 != 0,
+         root      = parse_root(PERMIT_NBR))
+
+adu_roots <- unique(raw2$root[raw2$units_row != 0])
+
+sec_pool <- raw2 %>%
+  filter(!root %in% adu_roots, !is_suppl,
+         USE_DESC %in% c("Accessory Dwelling Unit", "Junior Accessory Dwelling Unit"),
+         str_starts(coalesce(PERMIT_TYPE, ""), "Bldg"),
+         PERMIT_TYPE != "Bldg-Demolition",
+         !is.na(issue_dt), issue_dt >= as.Date("2017-01-01"),
+         str_detect(toupper(coalesce(WORK_DESC, "")),
+                    "NEW|CONVER|CONSTRUCT|BUILD|ADDITION|CREATE|CHANGE OF USE"))
+sec_roots <- setdiff(unique(sec_pool$root), adu_roots)
+sec_2017  <- sum(year(sec_pool$issue_dt[!duplicated(sec_pool$root)]) == 2017)
+
+log_tbl <- add_row(log_tbl,
+  step = sprintf("1b. Add use-type/description-identified ADU permits the flag misses (+%s projects, %s of them 2017)",
+                 comma(length(sec_roots)), comma(sec_2017)),
+  remaining = nrow(adu_rows) + length(sec_roots), dropped = 0L)
 kable(log_tbl, format.args = list(big.mark = ","))
 ```
 
@@ -113,40 +165,31 @@ lives *only* on a supplement (scope changed to an ADU mid-stream), so I group on
 full universe of rows belonging to flagged projects, not just flagged rows.
 
 ```{r step2}
-parse_root <- function(pn) {
-  m <- str_match(pn, "^(\\d{5})-(\\d{5})-(\\d{5})$")
-  mid <- as.integer(m[, 3])
-  paste0(m[, 2], "-", sprintf("%05d", (mid %/% 10000) * 10000), "-", m[, 4])
-}
-
-raw2 <- raw %>%
-  mutate(across(c(ADU_CHANGED, JUNIOR_ADU), ~replace_na(as.numeric(.x), 0)),
-         units_row = ADU_CHANGED + JUNIOR_ADU,
-         issue_dt  = mdy(ISSUE_DATE),
-         cofo_dt   = mdy(COFO_DATE),
-         mid       = as.integer(str_sub(PERMIT_NBR, 7, 11)),
-         is_suppl  = mid %% 10000 != 0,
-         root      = parse_root(PERMIT_NBR))
-
-adu_roots <- unique(raw2$root[raw2$units_row != 0])
-
 completed_statuses <- c("CofO Issued","CofO Corrected","CofO Superseded",
                         "CofC Issued","Permit Finaled")
 invalid_statuses   <- c("Permit Expired","Permit Closed",
                         "Refund in Progress","Intent to Revoke")
 
+all_roots <- union(adu_roots, sec_roots)
+
 projects <- raw2 %>%
-  filter(root %in% adu_roots) %>%
+  filter(root %in% all_roots) %>%
   group_by(root) %>%
   arrange(issue_dt, .by_group = TRUE) %>%
   summarise(
     units_raw_sum = sum(units_row),
     units = max(c(units_row[units_row > 0], 0)) + sum(units_row[units_row < 0]),
-    # year/location/parcel from the first ADU-flagged permit in the project
-    first_flag = list(slice_head(filter(pick(everything()), units_row != 0), n = 1)),
+    # year/location/parcel from the first ADU-flagged permit in the project;
+    # secondary-rule projects have no flagged row, so fall back to the first permit
+    first_flag = list({
+      ff <- filter(pick(everything()), units_row != 0)
+      if (nrow(ff) == 0) ff <- pick(everything())
+      slice_head(arrange(ff, issue_dt), n = 1)
+    }),
     status_orig = first(STATUS_DESC[!is_suppl], default = first(STATUS_DESC)),
     any_cofo    = any(!is.na(cofo_dt)),
     completed   = any_cofo | any(STATUS_DESC %in% completed_statuses),
+    last_activity = if (all(is.na(status_dt))) as.Date(NA) else max(status_dt, na.rm = TRUE),
     .groups = "drop") %>%
   unnest_wider(first_flag, names_sep = "_") %>%
   transmute(root, units_raw_sum, units,
@@ -155,14 +198,50 @@ projects <- raw2 %>%
             cpa_raw = first_flag_CPA,
             lat = as.numeric(first_flag_LAT), lon = as.numeric(first_flag_LON),
             work_desc = first_flag_WORK_DESC,
-            status_orig, any_cofo, completed)
+            status_orig, any_cofo, completed, last_activity,
+            source_rule = if_else(root %in% sec_roots,
+                                  "use-type/description", "inventory flag")) %>%
+  # secondary-rule projects carry no unit count; they are overwhelmingly single ADUs
+  mutate(units = if_else(source_rule == "use-type/description" & units <= 0, 1, units))
 
-phantom_units <- sum(pmax(projects$units_raw_sum - projects$units, 0))
+phantom_units <- sum(pmax(projects$units_raw_sum - projects$units,
+                          0)[projects$source_rule == "inventory flag"])
 log_tbl <- add_row(log_tbl,
   step = sprintf("2. Collapse supplements into parent permit ('project'); removes %s phantom units vs naive row-sum",
                  comma(phantom_units)),
   remaining = nrow(projects),
   dropped = log_tbl$remaining[nrow(log_tbl)] - nrow(projects))
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+## Step 2b — Merge same-site duplicate permit chains
+
+The flooring rule occasionally misses a supplement issued under a different series
+digit (e.g., `18016-30000-41278` supplementing `18016-20000-41278`), so one job can
+appear as two "projects." Where projects share the same first and last permit-number
+groups **and** the same parcel (PIN), I merge them: larger unit claim kept (restatement
+logic), earliest issue year, completed if any chain completed.
+
+```{r step2b}
+n_before <- nrow(projects)
+projects <- projects %>%
+  mutate(gkey = if_else(is.na(pin),
+                        paste0("solo|", root),
+                        paste(str_sub(root, 1, 5), str_sub(root, 13, 17), pin, sep = "|"))) %>%
+  group_by(gkey) %>%
+  arrange(desc(units), issue_year, .by_group = TRUE) %>%
+  summarise(across(c(root, pin, apn, cpa_raw, lat, lon, work_desc,
+                     status_orig, source_rule), first),
+            units = max(units), units_raw_sum = sum(units_raw_sum),
+            issue_year = min(issue_year),
+            any_cofo = any(any_cofo), completed = any(completed),
+            last_activity = if (all(is.na(last_activity))) as.Date(NA)
+                            else max(last_activity, na.rm = TRUE),
+            .groups = "drop") %>%
+  select(-gkey)
+log_tbl <- add_row(log_tbl,
+  step = "2b. Merge duplicate chains sharing permit-number series + parcel (one job counted twice)",
+  remaining = nrow(projects), dropped = n_before - nrow(projects))
 kable(log_tbl, format.args = list(big.mark = ","))
 ```
 
@@ -258,21 +337,34 @@ log_tbl <- add_row(log_tbl,
 kable(log_tbl, format.args = list(big.mark = ","))
 ```
 
-# 8. Step 7 — Demarcate completed vs. in-progress
+# 8. Step 7 — Demarcate completed vs. in-progress vs. stalled
 
 **Completed** = a `COFO_DATE` anywhere in the permit chain, or a status of CofO Issued /
 CofO Corrected / CofO Superseded / CofC Issued / **Permit Finaled** (final inspection
-passed; LADBS left the CofO date blank on a small set of finaled permits).
-**In progress** = everything that survived the validity screen but hasn't finished:
-Issued, CofO in Progress (CofO paperwork underway but not issued), Re-Activate Permit,
-No Progress, Not Ready for Inspection. Completion is as of the November 2026 refresh.
+passed; for conversions LADBS often closes with a final sign-off or Certificate of
+Completion rather than a CofO, so finaled = built).
+**In progress** = survived the validity screen, not finished, and the permit chain shows
+status activity within the last three years.
+**Stalled** = not finished and **no status activity in 3+ years** — mostly permits
+sitting at "Issued" that never formally expired. An audit found these are a quarter of
+the not-completed group; counting them as live pipeline would overstate construction
+underway, but they are not formally dead either, so they get their own category rather
+than being dropped. Status is as of the November 2026 refresh.
 
 ```{r step7}
+data_asof    <- max(raw2$status_dt, na.rm = TRUE)
+stall_cutoff <- data_asof - years(3)
 projects <- projects %>%
-  mutate(outcome = if_else(completed, "Completed", "In progress"))
+  mutate(outcome = case_when(
+           completed ~ "Completed",
+           !is.na(last_activity) & last_activity < stall_cutoff ~ "Stalled (3+ yrs inactive)",
+           TRUE ~ "In progress"),
+         outcome = factor(outcome, levels = names(pal_outcome)))
 log_tbl <- add_row(log_tbl,
-  step = sprintf("7. Demarcate outcome: %s completed / %s in progress",
-                 comma(sum(projects$completed)), comma(sum(!projects$completed))),
+  step = sprintf("7. Demarcate outcome: %s completed / %s in progress / %s stalled (3+ yrs inactive)",
+                 comma(sum(projects$outcome == "Completed")),
+                 comma(sum(projects$outcome == "In progress")),
+                 comma(sum(projects$outcome == "Stalled (3+ yrs inactive)"))),
   remaining = nrow(projects), dropped = 0L)
 kable(log_tbl, caption = "Full filtering log", format.args = list(big.mark = ","))
 ```
@@ -287,14 +379,14 @@ yearly <- projects %>%
   summarise(projects = n(),
             units_completed   = sum(units[outcome == "Completed"]),
             units_in_progress = sum(units[outcome == "In progress"]),
+            units_stalled     = sum(units[outcome == "Stalled (3+ yrs inactive)"]),
             units = sum(units)) %>%   # note: total named last so `units` isn't masked above
   relocate(units, .after = projects) %>%
-  mutate(pct_completed = percent(units_completed / units, accuracy = 0.1)) %>%
-  relocate(units_in_progress, .after = units_completed)
+  mutate(pct_completed = percent(units_completed / units, accuracy = 0.1))
 kable(yearly, format.args = list(big.mark = ","),
       col.names = c("Issue year","ADU projects (permits)","ADU units",
-                    "Units completed","Units in progress","% completed"),
-      caption = "2026 is a partial year. Recent years show lower completion because construction is typically 1-3 years from permit to CofO.")
+                    "Units completed","Units in progress","Units stalled (3+ yrs)","% completed"),
+      caption = "2026 is a partial year. Recent years show lower completion because construction is typically 1-3 years from permit to CofO; stalled = no permit-status activity in 3+ years.")
 ```
 
 ## 9.2 Units by CPA and year
@@ -340,6 +432,7 @@ by_property <- projects %>%
             adu_units_total = sum(units),
             adu_units_completed = sum(units[outcome == "Completed"]),
             adu_units_in_progress = sum(units[outcome == "In progress"]),
+            adu_units_stalled = sum(units[outcome == "Stalled (3+ yrs inactive)"]),
             first_permit_year = min(issue_year),
             last_permit_year = max(issue_year), .groups = "drop")
 write_csv(by_property, "adu_properties_by_pin.csv")
@@ -520,16 +613,16 @@ LADBS-based series.
 tribble(
   ~Benchmark, ~Period, ~`Their count`, ~`My count`, ~Assessment,
   "Crane (2020), UCLA dissertation - LADBS permits",
-    "2017-2018", "'over 6,000' ADUs permitted", "5,719 projects / 5,723 units (5,916 raw rows)",
-    "Within ~5%. Crane counted c. 2019-20, before ~131 of those permits expired/closed (I drop them as invalid); raw rows incl. supplements close most of the rest. Replicates.",
+    "2017-2018", "'over 6,000' ADUs permitted", "6,135 projects / 6,140 units",
+    "Nearly exact once Step 1b recovers the 2017 permits the inventory flag misses. Replicates.",
   "Brueckner & Thomaz (2024), Real Estate Economics - LA City Planning permits",
-    "Cumulative through 2019", "8,097 parcels (2017: 1,693; 2018: 3,193; 2019: 2,888)", "10,305 projects, 2017-2019",
+    "Cumulative through 2019", "8,097 parcels (2017: 1,693; 2018: 3,193; 2019: 2,888)", "10,739 projects, 2017-2019",
     "Mine is higher by design: they keep only single-family parcels and drop outlier parcels, excluding the multifamily conversions I keep. Their 2017 (1,693) is close to mine (1,606); their 2019 dip suggests a mid-year data cut. Consistent.",
   "HCD Annual Progress Reports (City self-reports)",
-    "2017-2024", "2017: 2,342 | 2018: 4,079 | 2019: 6,747 | 2023: 9,358 | 2024: 9,849 units", "2017: 1,607 | 2018: 4,116 | 2019: 4,596 | 2023: 6,713 | 2024: 7,191 units",
-    "APR runs 30-50% higher most years (2018 nearly matches). Known discrepancy: APRs are planning-department unit counts self-reported for RHNA credit, with a broader net (resubmittals, movable units, units later expired). Different universe, not an error in either series.",
+    "2017-2024", "2017: 2,342 | 2018: 4,079 | 2019: 6,747 | 2023: 9,358 | 2024: 9,849 units", "2017: 1,994 | 2018: 4,146 | 2019: 4,613 | 2023: 6,765 | 2024: 7,219 units",
+    "APR runs 25-45% higher most years (2018 nearly matches; the 2017 gap narrows once Step 1b recovers flag-missed permits). Known discrepancy: APRs are planning-department unit counts self-reported for RHNA credit, with a broader net (resubmittals, movable units, units later expired). Different universe, not an error in either series.",
   "Crosstown LA - same LADBS dataset",
-    "2020 - Apr 30, 2025", "26,835 ADUs permitted", "~30,400 projects, same window",
+    "2020 - Apr 30, 2025", "26,835 ADUs permitted", "~30,500 projects, same window",
     "Mine ~13% higher: the structural-inventory fields capture JADUs, multifamily storage/garage conversions, and ADUs embedded in larger permits that description-based counts can miss. Same source, slightly wider net. Consistent."
 ) %>% kable()
 ```
@@ -552,7 +645,7 @@ yearly_long <- projects %>%
 
 ggplot(yearly_long, aes(factor(issue_year), units, fill = outcome)) +
   geom_col(width = 0.78) +
-  scale_fill_manual(values = pal_outcome, name = NULL) +
+  scale_fill_manual(values = pal_outcome, name = NULL, drop = FALSE) +
   scale_y_continuous(labels = comma) +
   labs(title = "ADU units permitted in the City of Los Angeles, 2017-2026",
        subtitle = "By completion status as of Nov 2026 (2026 partial year)",
@@ -566,7 +659,7 @@ focus %>%
   ggplot(aes(factor(issue_year), units, fill = outcome)) +
   geom_col(width = 0.78) +
   facet_wrap(~cpa) +
-  scale_fill_manual(values = pal_outcome, name = NULL) +
+  scale_fill_manual(values = pal_outcome, name = NULL, drop = FALSE) +
   labs(title = "ADU units permitted in the three focus Community Plan Areas",
        subtitle = "By completion status as of Nov 2026 (2026 partial year)",
        x = NULL, y = "ADU units permitted") +
@@ -692,7 +785,7 @@ ggplot() +
   basemap_layer(bm_city, fade = 0.35) +
   geom_sf(data = cpa_3857, fill = NA, color = "grey45", linewidth = 0.15) +
   geom_sf(data = pts_3857, aes(color = outcome), size = 0.3, alpha = 0.7) +
-  scale_color_manual(values = pal_outcome, name = NULL,
+  scale_color_manual(values = pal_outcome, name = NULL, drop = FALSE,
                      guide = guide_legend(override.aes = list(size = 3, alpha = 1))) +
   facet_wrap(~issue_year, ncol = 4) +
   coord_sf(crs = 3857, xlim = c(bbc[["xmin"]], bbc[["xmax"]]),
@@ -719,7 +812,7 @@ for (area in focus_cpas) {
     # color stroke matches the fill, so even the smallest parcels stay visible at facet scale
     geom_sf(data = pm, aes(fill = outcome, color = outcome), linewidth = 0.3) +
     { if (nrow(up) > 0) geom_sf(data = up, aes(color = outcome), size = 0.7, show.legend = FALSE) } +
-    scale_fill_manual(values = pal_outcome, name = NULL) +
+    scale_fill_manual(values = pal_outcome, name = NULL, drop = FALSE) +
     scale_color_manual(values = pal_outcome, guide = "none") +
     facet_wrap(~issue_year, ncol = 5) +
     coord_sf(crs = 3857, xlim = c(bbm[["xmin"]], bbm[["xmax"]]),
@@ -774,10 +867,10 @@ gif_one <- function(label, draw_frame) {
 }
 
 # cumulative count line shown on every frame: running total, split, and that year's additions
-count_line <- function(cum_units, cum_done, cum_prog, new_units, y, place) {
+count_line <- function(cum_units, cum_done, cum_prog, cum_stall, new_units, y, place) {
   paste0(place, "\n", comma(cum_units), " ADU units permitted through ", y,
-         " (", comma(cum_done), " completed, ", comma(cum_prog), " in progress)",
-         "  |  +", comma(new_units), " in ", y)
+         " (", comma(cum_done), " completed, ", comma(cum_prog), " in progress, ",
+         comma(cum_stall), " stalled)", "  |  +", comma(new_units), " in ", y)
 }
 
 # citywide: dots over the basemap, cumulative through each year
@@ -785,6 +878,7 @@ gif_one("citywide", function(y) {
   cum <- filter(pts_3857, issue_year <= y)
   sub <- count_line(sum(cum$units), sum(cum$units[cum$outcome == "Completed"]),
                     sum(cum$units[cum$outcome == "In progress"]),
+                    sum(cum$units[cum$outcome == "Stalled (3+ yrs inactive)"]),
                     sum(pts_3857$units[pts_3857$issue_year == y]), y, "City of Los Angeles")
   ggplot() +
     basemap_layer(bm_city) +
@@ -815,8 +909,10 @@ for (area in focus_cpas) {
     cumU <- filter(upA, issue_year <= y)
     cu <- sum(cumP$units) + sum(cumU$units)
     cd <- sum(cumP$units[cumP$outcome == "Completed"]) + sum(cumU$units[cumU$outcome == "Completed"])
+    cs <- sum(cumP$units[cumP$outcome == "Stalled (3+ yrs inactive)"]) +
+          sum(cumU$units[cumU$outcome == "Stalled (3+ yrs inactive)"])
     ny <- sum(pmA$units[pmA$issue_year == y]) + sum(upA$units[upA$issue_year == y])
-    sub <- count_line(cu, cd, cu - cd, ny, y, area)
+    sub <- count_line(cu, cd, cu - cd - cs, cs, ny, y, area)
     ggplot() +
       basemap_layer(bmF) +
       geom_sf(data = bdryM, fill = NA, color = "grey35", linewidth = 0.4) +
@@ -848,7 +944,7 @@ gif_files <- c("adu_citywide.gif",
                paste0("adu_", str_replace_all(tolower(focus_cpas), "[^a-z]+", "_"), ".gif"))
 shown <- FALSE
 for (g in gif_files) if (file.exists(g)) { cat(sprintf("![](%s)\n\n", g)); shown <- TRUE }
-if (!shown) cat("*Animations not built in this knit — render with `params = list(make_gifs = TRUE)` to generate them.*\n")
+if (!shown) cat("*Animations not built in this knit - render with `params = list(make_gifs = TRUE)` to generate them.*\n")
 ```
 
 ---

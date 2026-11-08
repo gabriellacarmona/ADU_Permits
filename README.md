@@ -60,12 +60,17 @@ protects the content.
 ## Method in one paragraph
 
 ADU permits are identified by the LADBS structural-inventory fields `ADU_CHANGED` +
-`JUNIOR_ADU` (net unit changes, populated from 2017). Supplemental permits are collapsed
-into their parent permit ("project"); units are netted so corrections cancel; four
+`JUNIOR_ADU` (net unit changes, populated from 2017), plus a secondary use-type/
+description rule that recovers permits the flag misses (its coverage ramps in during
+2017). Supplemental permits are collapsed into their parent permit ("project") and
+same-site duplicate chains are merged; units are netted so corrections cancel; four
 square-footage-as-unit-count typos are fixed; projects netting ≤ 0 units (demolitions,
 removals) and invalid permits (expired/closed/refunded/revoked with no CofO anywhere in
 the permit chain) are dropped. Completed = CofO date or CofO-issued/corrected/finaled
-status; everything else still alive is in progress. CPA names are normalized to the
+status; not-completed permits with no status activity in 3+ years are flagged
+"stalled"; the rest are in progress. The pipeline was independently audited: every
+filter count re-derived from raw data, and the identification rule stress-tested
+against description-based alternatives. CPA names are normalized to the
 GeoHub boundary spellings (Central City + Central City North → Downtown). Full details,
 counts dropped at each step, and validation against Crane (2020), Brueckner & Thomaz
 (2024), HCD APRs, and Crosstown LA are in the report.
