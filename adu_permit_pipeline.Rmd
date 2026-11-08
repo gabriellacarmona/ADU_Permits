@@ -1,0 +1,854 @@
+---
+title: "City of Los Angeles ADU Permits, 2017–Present: Data Construction, Validation, and Maps"
+author: "Gabriella Carmona"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    code_folding: show
+    theme: flatly
+params:
+  path_2010s: "Building_and_Safety_-_Building_Permits_Issued_Between_2010_and_2019_(N)_20261107.csv"
+  path_2020s: "Building_and_Safety_-_Building_Permits_Issued_from_2020_to_Present_(N)_20261107.csv"
+  cpa_geojson: "https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/CPA/FeatureServer/0/query?where=1%3D1&outFields=NAME_ALF&f=geojson"
+  sf_parcels: "sf_parcels_by_cpa.csv"
+  parcels_focus: "parcels_focus.geojson"
+  make_gifs: FALSE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.width = 9, fig.height = 6)
+library(dplyr); library(tidyr); library(readr); library(stringr)
+library(purrr); library(tibble); library(ggplot2)
+library(lubridate)
+library(sf)
+library(knitr)
+library(kableExtra)
+library(scales)
+# For the GIF step only (install if needed): install.packages("gifski")
+
+# Color coding used throughout: Okabe-Ito colorblind-safe pair
+col_completed   <- "#0072B2"  # blue
+col_in_progress <- "#D55E00"  # vermillion
+pal_outcome <- c("Completed" = col_completed, "In progress" = col_in_progress)
+theme_set(theme_minimal(base_size = 12))
+```
+
+# 1. Data and variables
+
+I use the two LADBS **Building Permits Issued** extracts from the LA Open Data portal
+(permits issued 2010–2019 and 2020–present; both refreshed **November 1, 2026**, downloaded
+November 7, 2026). Each row is one issued permit. The variables I rely on:
+
+| Variable | What it is | How I use it |
+|---|---|---|
+| `PERMIT_NBR` | 15-digit permit number, `XXXXX-YYYYY-NNNNN`. Supplemental permits (plan revisions on the same job) increment the middle group: `-20000` → `-20001`, `-20002`, … | Grouping supplements with their parent permit |
+| `ADU_CHANGED`, `JUNIOR_ADU` | **Net change** in ADU / Junior ADU units on the structural inventory — not 0/1 flags. Mostly +1; legitimately 2–43 for multifamily conversions; negative for removals, demolitions, and corrections. Populated **only from 2017 onward**, which is why the series starts in 2017. | Identifying ADU permits and counting units |
+| `COFO_DATE` | Certificate of Occupancy date. Filled for essentially all `CofO Issued` permits and almost nothing else | Completion demarcation (with `STATUS_DESC`) |
+| `STATUS_DESC` | Current permit status (CofO Issued, Issued, Permit Finaled, Permit Expired, …) | Validity and completion |
+| `ISSUE_DATE` | Date the permit was issued | Year assignment |
+| `CPA` | Community Plan Area | Geography (normalized in Step 6) |
+| `PIN_NBR` | Parcel identification number | Property-level collapse |
+| `LAT`, `LON` | Geocoded location | Maps |
+
+Three universe caveats to keep in mind: (1) these are **issued** permits — applications
+never issued, and unpermitted ADUs, are absent; (2) 2026 is a **partial year** (through
+~Nov 1, 2026); (3) completion status is as of the data refresh — a 2024 permit shown
+"in progress" may simply still be under construction.
+
+```{r load}
+keep_cols <- c("PERMIT_NBR","PIN_NBR","APN","CPA","PERMIT_TYPE","USE_DESC",
+               "ISSUE_DATE","COFO_DATE","ADU_CHANGED","JUNIOR_ADU",
+               "STATUS_DESC","WORK_DESC","LAT","LON")
+raw <- bind_rows(
+  read_csv(params$path_2010s, col_select = all_of(keep_cols),
+           col_types = cols(.default = col_character())),
+  read_csv(params$path_2020s, col_select = all_of(keep_cols),
+           col_types = cols(.default = col_character()))
+)
+
+# running filter log ("waterfall") I add to at each step
+log_tbl <- tibble(step = "0. Raw permit rows, both files",
+                  remaining = nrow(raw), dropped = NA_integer_)
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+# 2. Step 1 — Flag ADU permit rows
+
+A permit is ADU-related when `ADU_CHANGED + JUNIOR_ADU` nets to something other than
+zero. I keep negatives at this stage **on purpose**: they are corrections and removals
+that I need later to net against erroneous positives. Only rows that net to exactly
+zero *within the row* drop here (e.g., `ADU_CHANGED = -1, JUNIOR_ADU = +1`, an ADU
+reclassified as a JADU — no change in stock).
+
+```{r step1}
+adu_rows <- raw %>%
+  mutate(across(c(ADU_CHANGED, JUNIOR_ADU), ~replace_na(as.numeric(.x), 0)),
+         units_row = ADU_CHANGED + JUNIOR_ADU,
+         issue_dt  = mdy(ISSUE_DATE),
+         cofo_dt   = mdy(COFO_DATE)) %>%
+  filter(units_row != 0)
+
+log_tbl <- add_row(log_tbl, step = "1. Rows where ADU_CHANGED + JUNIOR_ADU nets ≠ 0",
+                   remaining = nrow(adu_rows),
+                   dropped = log_tbl$remaining[nrow(log_tbl)] - nrow(adu_rows))
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+# 3. Step 2 — Collapse supplemental permits into projects
+
+Supplemental permits are plan revisions on the same construction job, and they often
+**restate** the parent permit's ADU count — so counting rows double-counts. I group every
+permit to its parent ("project") by zeroing the supplement counter in the middle group of
+the permit number (`16010-20002-04817` → `16010-20000-04817`).
+
+Within a project, I set **units = largest positive claim + the sum of negative
+corrections**. Two things this handles automatically: (a) a supplement restating the
+parent's `+1` no longer adds a second unit; (b) data-entry corrections net out — e.g.,
+one permit recorded **+859 ADUs** (the unit's square footage typed into the unit field)
+and its supplement recorded **−858**, netting to the true 1. Some projects' ADU flag
+lives *only* on a supplement (scope changed to an ADU mid-stream), so I group on the
+full universe of rows belonging to flagged projects, not just flagged rows.
+
+```{r step2}
+parse_root <- function(pn) {
+  m <- str_match(pn, "^(\\d{5})-(\\d{5})-(\\d{5})$")
+  mid <- as.integer(m[, 3])
+  paste0(m[, 2], "-", sprintf("%05d", (mid %/% 10000) * 10000), "-", m[, 4])
+}
+
+raw2 <- raw %>%
+  mutate(across(c(ADU_CHANGED, JUNIOR_ADU), ~replace_na(as.numeric(.x), 0)),
+         units_row = ADU_CHANGED + JUNIOR_ADU,
+         issue_dt  = mdy(ISSUE_DATE),
+         cofo_dt   = mdy(COFO_DATE),
+         mid       = as.integer(str_sub(PERMIT_NBR, 7, 11)),
+         is_suppl  = mid %% 10000 != 0,
+         root      = parse_root(PERMIT_NBR))
+
+adu_roots <- unique(raw2$root[raw2$units_row != 0])
+
+completed_statuses <- c("CofO Issued","CofO Corrected","CofO Superseded",
+                        "CofC Issued","Permit Finaled")
+invalid_statuses   <- c("Permit Expired","Permit Closed",
+                        "Refund in Progress","Intent to Revoke")
+
+projects <- raw2 %>%
+  filter(root %in% adu_roots) %>%
+  group_by(root) %>%
+  arrange(issue_dt, .by_group = TRUE) %>%
+  summarise(
+    units_raw_sum = sum(units_row),
+    units = max(c(units_row[units_row > 0], 0)) + sum(units_row[units_row < 0]),
+    # year/location/parcel from the first ADU-flagged permit in the project
+    first_flag = list(slice_head(filter(pick(everything()), units_row != 0), n = 1)),
+    status_orig = first(STATUS_DESC[!is_suppl], default = first(STATUS_DESC)),
+    any_cofo    = any(!is.na(cofo_dt)),
+    completed   = any_cofo | any(STATUS_DESC %in% completed_statuses),
+    .groups = "drop") %>%
+  unnest_wider(first_flag, names_sep = "_") %>%
+  transmute(root, units_raw_sum, units,
+            issue_year = year(first_flag_issue_dt),
+            pin  = first_flag_PIN_NBR, apn = first_flag_APN,
+            cpa_raw = first_flag_CPA,
+            lat = as.numeric(first_flag_LAT), lon = as.numeric(first_flag_LON),
+            work_desc = first_flag_WORK_DESC,
+            status_orig, any_cofo, completed)
+
+phantom_units <- sum(pmax(projects$units_raw_sum - projects$units, 0))
+log_tbl <- add_row(log_tbl,
+  step = sprintf("2. Collapse supplements into parent permit ('project'); removes %s phantom units vs naive row-sum",
+                 comma(phantom_units)),
+  remaining = nrow(projects),
+  dropped = log_tbl$remaining[nrow(log_tbl)] - nrow(projects))
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+# 4. Step 3 — Fix unit-count typos
+
+Four projects have square footage typed into the unit-count field with **no** correcting
+supplement (values of 14, 378, 711, and 1,178). Each work description plainly describes a
+single ADU ("Convert existing attached garage to new ADU…"), so I set them to 1. I
+reviewed every project above 10 units: the rest (11–43 units) are genuine multifamily
+conversions under Gov. Code 65852.2(e)(1)(C), with the unit count corroborated by the work
+description ("CONVERSION OF 43 STORAGE ROOMS IN APARTMENT BUILDING TO ACCESSORY
+DWELLINGS"), so those stay.
+
+```{r step3}
+typo_roots <- c("21014-20000-05640","22016-20000-05796",
+                "24016-20000-02447","21014-10000-05465")
+units_before <- sum(pmax(projects$units, 0))
+projects <- projects %>%
+  mutate(units = if_else(root %in% typo_roots & units > 1, 1, units))
+log_tbl <- add_row(log_tbl,
+  step = sprintf("3. Fix 4 sq-footage-as-unit-count typos (gross units %s -> %s)",
+                 comma(units_before), comma(sum(pmax(projects$units, 0)))),
+  remaining = nrow(projects), dropped = 0L)
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+# 5. Step 4 — Drop projects that net ≤ 0 ADUs
+
+What remains at zero or below after netting is not ADU construction: demolitions
+(every demolition permit carries −1 to −3), ADU removals, and scopes reversed by
+supplement. These reduce or leave unchanged the ADU stock, so they exit here.
+
+```{r step4}
+n_before <- nrow(projects)
+projects <- filter(projects, units > 0)
+log_tbl <- add_row(log_tbl, step = "4. Drop projects with net ADU change <= 0 (demolitions, removals, reversed scopes)",
+                   remaining = nrow(projects), dropped = n_before - nrow(projects))
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+# 6. Step 5 — Drop invalid permits
+
+A permit can be issued and then die: statuses **Permit Expired**, **Permit Closed**,
+**Refund in Progress**, and **Intent to Revoke** mean the project was never built or was
+withdrawn. I drop projects whose *original* permit holds one of these statuses — unless a
+Certificate of Occupancy exists anywhere in the permit chain, in which case the ADU was
+built and the project stays (this rescues a handful where only a supplement expired).
+
+```{r step5}
+n_before <- nrow(projects)
+rescued  <- sum(projects$status_orig %in% invalid_statuses & projects$completed)
+projects <- filter(projects, !(status_orig %in% invalid_statuses & !completed))
+log_tbl <- add_row(log_tbl,
+  step = sprintf("5. Drop invalid: original status Expired/Closed/Refund/Revoke with no CofO in chain (%d kept via CofO rescue)", rescued),
+  remaining = nrow(projects), dropped = n_before - nrow(projects))
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+# 7. Step 6 — Normalize Community Plan Area names
+
+The `CPA` field carries spelling variants of the same plan areas (truncated names, a few
+comma-joined doubles) plus one genuine boundary change: the 2023 **Downtown Community
+Plan** replaced *Central City* and *Central City North*, and newer permits already say
+"Downtown." For a consistent series I merge all three into **Downtown**. I spell every
+area exactly as LA City Planning's GeoHub boundary file does (`NAME_ALF`), so the spatial
+join in the map section is a clean string match.
+
+```{r step6}
+cpa_map <- c(
+  "Canoga Park-West Hills-Winnetka-Woodland Hill"  = "Canoga Park - Winnetka - Woodland Hills - West Hills",
+  "Canoga Park-West Hills-Winnetka-Woodland Hills" = "Canoga Park - Winnetka - Woodland Hills - West Hills",
+  "Canoga Park-West Hills-Winnetka-Woodland Hill, Canoga Park-West Hills-Winnetka-Woodland Hills" = "Canoga Park - Winnetka - Woodland Hills - West Hills",
+  "Canoga Park - West Hills - Winnetka - Woodland Hills" = "Canoga Park - Winnetka - Woodland Hills - West Hills",
+  "Sherman Oaks - Studio City - Toluca Lake"       = "Sherman Oaks - Studio City - Toluca Lake - Cahuenga Pass",
+  "Sherman Oaks-Studio City-Toluca Lake-Cahuenga"  = "Sherman Oaks - Studio City - Toluca Lake - Cahuenga Pass",
+  "Sherman Oaks-Studio City-Toluca Lake-Cahuenga Pass" = "Sherman Oaks - Studio City - Toluca Lake - Cahuenga Pass",
+  "Sherman Oaks-Studio City-Toluca Lake-Cahuenga, Sherman Oaks-Studio City-Toluca Lake-Cahuenga Pass" = "Sherman Oaks - Studio City - Toluca Lake - Cahuenga Pass",
+  "Sunland-E LaTuna Cyn-Lakevw Ter-Shadow Hls-Tu"  = "Sunland - Tujunga - Lake View Terrace - Shadow Hills - East La Tuna Canyon",
+  "Sunland-E LaTuna Cyn-Lakevw Ter-Shadow Hls-Tujunga" = "Sunland - Tujunga - Lake View Terrace - Shadow Hills - East La Tuna Canyon",
+  "Sunland-E LaTuna Cyn-Lakevw Ter-Shadow Hls-Tu, Sunland-E LaTuna Cyn-Lakevw Ter-Shadow Hls-Tujunga" = "Sunland - Tujunga - Lake View Terrace - Shadow Hills - East La Tuna Canyon",
+  "North Hollywood"     = "North Hollywood - Valley Village",
+  "Central City"        = "Downtown",
+  "Central City North"  = "Downtown")
+
+projects <- projects %>%
+  mutate(cpa = coalesce(recode(cpa_raw, !!!cpa_map), "Unknown"),
+         cpa = if_else(is.na(cpa_raw), "Unknown", cpa))
+log_tbl <- add_row(log_tbl,
+  step = sprintf("6. Normalize CPA names (%s projects remapped; %d CPAs)",
+                 comma(sum(projects$cpa != coalesce(projects$cpa_raw, "Unknown"))),
+                 n_distinct(projects$cpa)),
+  remaining = nrow(projects), dropped = 0L)
+kable(log_tbl, format.args = list(big.mark = ","))
+```
+
+# 8. Step 7 — Demarcate completed vs. in-progress
+
+**Completed** = a `COFO_DATE` anywhere in the permit chain, or a status of CofO Issued /
+CofO Corrected / CofO Superseded / CofC Issued / **Permit Finaled** (final inspection
+passed; LADBS left the CofO date blank on a small set of finaled permits).
+**In progress** = everything that survived the validity screen but hasn't finished:
+Issued, CofO in Progress (CofO paperwork underway but not issued), Re-Activate Permit,
+No Progress, Not Ready for Inspection. Completion is as of the November 2026 refresh.
+
+```{r step7}
+projects <- projects %>%
+  mutate(outcome = if_else(completed, "Completed", "In progress"))
+log_tbl <- add_row(log_tbl,
+  step = sprintf("7. Demarcate outcome: %s completed / %s in progress",
+                 comma(sum(projects$completed)), comma(sum(!projects$completed))),
+  remaining = nrow(projects), dropped = 0L)
+kable(log_tbl, caption = "Full filtering log", format.args = list(big.mark = ","))
+```
+
+# 9. Results
+
+## 9.1 Citywide progression by year
+
+```{r yearly}
+yearly <- projects %>%
+  group_by(issue_year) %>%
+  summarise(projects = n(),
+            units_completed   = sum(units[outcome == "Completed"]),
+            units_in_progress = sum(units[outcome == "In progress"]),
+            units = sum(units)) %>%   # note: total named last so `units` isn't masked above
+  relocate(units, .after = projects) %>%
+  mutate(pct_completed = percent(units_completed / units, accuracy = 0.1)) %>%
+  relocate(units_in_progress, .after = units_completed)
+kable(yearly, format.args = list(big.mark = ","),
+      col.names = c("Issue year","ADU projects (permits)","ADU units",
+                    "Units completed","Units in progress","% completed"),
+      caption = "2026 is a partial year. Recent years show lower completion because construction is typically 1-3 years from permit to CofO.")
+```
+
+## 9.2 Units by CPA and year
+
+```{r cpa-year}
+cpa_year <- projects %>%
+  count(cpa, issue_year, wt = units, name = "units") %>%
+  pivot_wider(names_from = issue_year, values_from = units, values_fill = 0) %>%
+  mutate(Total = rowSums(across(where(is.numeric)))) %>%
+  arrange(desc(Total))
+kable(cpa_year, format.args = list(big.mark = ","))
+```
+
+## 9.3 Focus areas: Arleta–Pacoima, Northeast LA, West Adams–Baldwin Hills–Leimert
+
+```{r focus}
+focus_cpas <- c("Arleta - Pacoima", "Northeast Los Angeles",
+                "West Adams - Baldwin Hills - Leimert")
+focus <- filter(projects, cpa %in% focus_cpas)
+
+focus %>%
+  count(issue_year, cpa, wt = units, name = "units") %>%
+  pivot_wider(names_from = cpa, values_from = units, values_fill = 0) %>%
+  kable(caption = "ADU units permitted by year")
+
+focus %>%
+  group_by(cpa, outcome) %>%
+  summarise(units = sum(units), .groups = "drop") %>%
+  pivot_wider(names_from = outcome, values_from = units) %>%
+  kable(caption = "Totals 2017-present by completion status")
+```
+
+## 9.4 Property-level collapse (PIN_NBR)
+
+One row per property: how many ADU permits were filed, how many ADU units were
+permitted, and of those how many are completed vs. in progress.
+
+```{r pin}
+by_property <- projects %>%
+  group_by(pin) %>%
+  summarise(apn = first(apn), cpa = first(cpa),
+            adu_permits_filed = n(),
+            adu_units_total = sum(units),
+            adu_units_completed = sum(units[outcome == "Completed"]),
+            adu_units_in_progress = sum(units[outcome == "In progress"]),
+            first_permit_year = min(issue_year),
+            last_permit_year = max(issue_year), .groups = "drop")
+write_csv(by_property, "adu_properties_by_pin.csv")
+write_csv(projects %>% select(-work_desc), "adu_projects.csv")
+
+tibble(
+  Measure = c("Distinct properties with ADU permits",
+              "...filed exactly one ADU permit", "...filed 2+ permits",
+              "...with >=1 completed ADU", "...with >=1 ADU in progress"),
+  N = c(nrow(by_property),
+        sum(by_property$adu_permits_filed == 1),
+        sum(by_property$adu_permits_filed >= 2),
+        sum(by_property$adu_units_completed > 0),
+        sum(by_property$adu_units_in_progress > 0))) %>%
+  kable(format.args = list(big.mark = ","))
+```
+
+## 9.5 Where the focus CPAs rank among all CPAs
+
+Two ranking views, year by year, among the `r "34"` Community Plan Areas that appear in
+the permit data (Port of LA and LAX have essentially no residential parcels and no ADU
+permits, and are not ranked):
+
+1. **Counts** — rank by ADU units permitted *that year*.
+2. **Percent of single-family parcels** — rank by *cumulative* units through that year as
+   a share of the CPA's single-family parcels, i.e., penetration of the SF stock.
+
+The single-family parcel denominator comes from the LA County Assessor's 2025 local-roll
+parcel layer (eGIS `ASSR_PARCELS_25_View`): parcels with Use Code `01xx` (Single Family
+Residence), excluding the condominium, condo-conversion, cooperative, own-your-own,
+vacant-land, and non-structural-improvement suffix codes (C, E, F, H, V, X) — which
+closely mirrors the Assessor's `SFR` use type — counted within each CPA boundary
+(fully-contained rule). *Placeholder:* when we bring in the SCAG land-use dataset, swap
+`sf_parcels` for an ADU-**eligible** parcel count per CPA; the code below only touches the
+`denom` column, so nothing else changes. Note the numerator includes the (small) number of
+ADUs added to multifamily buildings, so the percentage slightly overstates SF-parcel
+penetration in multifamily-heavy CPAs.
+
+```{r rankings}
+sf_parcels <- read_csv(params$sf_parcels, show_col_types = FALSE)
+
+rank_base <- projects %>%
+  filter(cpa != "Unknown") %>%
+  count(cpa, issue_year, wt = units, name = "units") %>%
+  complete(cpa, issue_year = 2017:2026, fill = list(units = 0))
+n_ranked <- n_distinct(rank_base$cpa)
+
+annual <- rank_base %>%
+  group_by(issue_year) %>% mutate(rank_n = min_rank(desc(units))) %>% ungroup()
+
+cumul <- rank_base %>%
+  arrange(issue_year) %>%
+  group_by(cpa) %>% mutate(cum_units = cumsum(units)) %>% ungroup() %>%
+  left_join(rename(sf_parcels, denom = sf_parcels), by = "cpa") %>%
+  mutate(pct = 100 * cum_units / denom) %>%
+  group_by(issue_year) %>% mutate(rank_pct = min_rank(desc(pct))) %>% ungroup()
+
+# color bands: sequential blues, darker = higher rank
+band_bg <- function(r) case_when(r <= 5 ~ "#1F3864", r <= 10 ~ "#2E75B6",
+                                 r <= 17 ~ "#BDD7EE", TRUE ~ "#E7E6E6")
+band_fg <- function(r) if_else(r <= 10, "white", "black")
+
+rank_cells <- function(df, value_fmt, rank_col, val_col) {
+  df %>%
+    mutate(cell = cell_spec(paste0("#", .data[[rank_col]], " (", value_fmt(.data[[val_col]]), ")"),
+                            background = band_bg(.data[[rank_col]]),
+                            color = band_fg(.data[[rank_col]]), bold = TRUE)) %>%
+    select(cpa, issue_year, cell) %>%
+    pivot_wider(names_from = issue_year, values_from = cell) %>%
+    rename(`Community Plan Area` = cpa)
+}
+
+legend_note <- paste0("Cell = rank of ", n_ranked, " CPAs (value). Shading: dark blue = top 5, ",
+                      "medium blue = 6-10, light blue = 11-17, grey = 18-", n_ranked, ".")
+
+annual %>% filter(cpa %in% focus_cpas) %>%
+  rank_cells(function(v) comma(v), "rank_n", "units") %>%
+  kable(format = "html", escape = FALSE, caption = paste("Rank by ADU units permitted per year.", legend_note)) %>%
+  kable_styling(bootstrap_options = c("condensed"), full_width = FALSE)
+
+cumul %>% filter(cpa %in% focus_cpas) %>%
+  rank_cells(function(v) sprintf("%.1f%%", v), "rank_pct", "pct") %>%
+  kable(format = "html", escape = FALSE, caption = paste(
+    "Rank by CUMULATIVE ADU units as % of single-family parcels, through each year.", legend_note)) %>%
+  kable_styling(bootstrap_options = c("condensed"), full_width = FALSE)
+```
+
+And the full 2026 standings (cumulative, 2017 through Nov 2026), with our three focus
+CPAs highlighted:
+
+```{r rankings-full}
+standings <- cumul %>% filter(issue_year == 2026) %>%
+  mutate(rank_units = min_rank(desc(cum_units))) %>%
+  arrange(rank_pct)
+standings %>%
+  transmute(`Rank (% of SF parcels)` = rank_pct,
+            `Community Plan Area` = cpa,
+            `ADU units 2017-2026` = comma(cum_units),
+            `SF parcels` = comma(denom),
+            `Units per 100 SF parcels` = sprintf("%.1f", pct),
+            `Rank (units)` = rank_units) %>%
+  kable(format = "html", escape = TRUE, align = c("c","l","r","r","r","c"),
+        caption = "Cumulative standings through Nov 2026. SF parcels: LA County Assessor 2025 roll, single-family use codes (see text).") %>%
+  kable_styling(bootstrap_options = c("condensed","striped"), full_width = FALSE) %>%
+  row_spec(which(standings$cpa %in% focus_cpas), bold = TRUE, background = "#FFF2CC")
+```
+
+### Choropleth: cumulative ADUs by CPA, 2017 – Nov 2026
+
+Companion maps to the standings table: cumulative ADU units permitted per CPA, and the
+completed subset, on a **shared** bin scale so the two read side by side (a lighter
+completed map = more of that CPA's pipeline still under construction). Bins are
+quantile-based on the all-units distribution, rounded for legibility. Focus CPAs are
+outlined in black.
+
+```{r rankings-map, fig.width=12, fig.height=7}
+if (!exists("cpa_sf")) cpa_sf <- st_read(params$cpa_geojson, quiet = TRUE)
+cpa_map_sf <- cpa_sf %>%
+  filter(!NAME_ALF %in% c("Port of Los Angeles", "Los Angeles International Airport")) %>%
+  rename(cpa = NAME_ALF)
+
+cum_by_cpa <- projects %>% filter(cpa != "Unknown") %>%
+  group_by(cpa) %>%
+  summarise(`All ADU units` = sum(units),
+            `Completed ADU units` = sum(units[outcome == "Completed"]), .groups = "drop")
+
+cpa_join <- cpa_map_sf %>% left_join(cum_by_cpa, by = "cpa")
+choro <- bind_rows(   # explicit long format (keeps the sf class, unlike pivot_longer)
+  cpa_join %>% mutate(measure = "All ADU units",       value = `All ADU units`),
+  cpa_join %>% mutate(measure = "Completed ADU units", value = `Completed ADU units`)) %>%
+  mutate(measure = factor(measure, levels = c("All ADU units", "Completed ADU units")),
+         value = replace_na(value, 0))
+
+# shared bins: quantiles of the ALL-units distribution, rounded to clean numbers
+v <- cum_by_cpa$`All ADU units`
+brks <- unique(c(0, round(quantile(v, probs = seq(1/7, 6/7, length.out = 6)) / 50) * 50,
+                 ceiling(max(v) / 100) * 100))
+lab_fmt <- function(b) paste0(comma(head(b, -1) + 1), " - ", comma(tail(b, -1)))
+choro <- choro %>% mutate(bin = cut(value, breaks = brks, labels = lab_fmt(brks),
+                                    include.lowest = TRUE))
+
+# short anchor labels (first segment of the CPA name), placed inside each polygon
+labs_sf <- cpa_map_sf %>%
+  mutate(short = str_trim(str_split_fixed(cpa, "-", 2)[, 1]),
+         short = recode(short, "West Adams" = "West Adams-BH-Leimert",
+                        "Arleta" = "Arleta-Pacoima")) %>%
+  st_point_on_surface()
+
+focus_outline <- filter(cpa_map_sf, cpa %in% focus_cpas)
+
+g_choro <- ggplot(choro) +
+  geom_sf(aes(fill = bin), color = "white", linewidth = 0.25) +
+  geom_sf(data = focus_outline, fill = NA, color = "black", linewidth = 0.6) +
+  geom_sf_text(data = labs_sf, aes(label = short), size = 1.9, color = "grey25",
+               fun.geometry = sf::st_point_on_surface) +
+  facet_wrap(~measure) +
+  scale_fill_brewer(palette = "Blues", name = "ADU units,\n2017 - Nov 2026", drop = FALSE) +
+  labs(title = "Cumulative ADU units by Community Plan Area, 2017 - November 2026",
+       subtitle = "Shared bins across both panels; focus CPAs outlined in black",
+       caption = "LADBS permits (see filtering log); completed = CofO issued or permit finaled as of Nov 2026") +
+  theme_void() +
+  theme(legend.position = "right", strip.text = element_text(size = 12, face = "bold"),
+        plot.title = element_text(face = "bold"))
+dir.create("figures", showWarnings = FALSE)
+ggsave("figures/map_cpa_choropleth.png", g_choro, width = 12, height = 7, dpi = 200, bg = "white")
+g_choro
+```
+
+# 10. Validation against published counts
+
+As a replication check, I compare my counts to the LADBS-based academic studies and the
+most-cited public tallies. The short version: **LADBS-derived counts (mine, Crane,
+Brueckner & Thomaz, Crosstown) agree once definitional differences are applied, while HCD
+Annual Progress Report self-reports run 30–50% higher** and should not be pooled with
+LADBS-based series.
+
+```{r validation}
+tribble(
+  ~Benchmark, ~Period, ~`Their count`, ~`My count`, ~Assessment,
+  "Crane (2020), UCLA dissertation - LADBS permits",
+    "2017-2018", "'over 6,000' ADUs permitted", "5,719 projects / 5,723 units (5,916 raw rows)",
+    "Within ~5%. Crane counted c. 2019-20, before ~131 of those permits expired/closed (I drop them as invalid); raw rows incl. supplements close most of the rest. Replicates.",
+  "Brueckner & Thomaz (2024), Real Estate Economics - LA City Planning permits",
+    "Cumulative through 2019", "8,097 parcels (2017: 1,693; 2018: 3,193; 2019: 2,888)", "10,305 projects, 2017-2019",
+    "Mine is higher by design: they keep only single-family parcels and drop outlier parcels, excluding the multifamily conversions I keep. Their 2017 (1,693) is close to mine (1,606); their 2019 dip suggests a mid-year data cut. Consistent.",
+  "HCD Annual Progress Reports (City self-reports)",
+    "2017-2024", "2017: 2,342 | 2018: 4,079 | 2019: 6,747 | 2023: 9,358 | 2024: 9,849 units", "2017: 1,607 | 2018: 4,116 | 2019: 4,596 | 2023: 6,713 | 2024: 7,191 units",
+    "APR runs 30-50% higher most years (2018 nearly matches). Known discrepancy: APRs are planning-department unit counts self-reported for RHNA credit, with a broader net (resubmittals, movable units, units later expired). Different universe, not an error in either series.",
+  "Crosstown LA - same LADBS dataset",
+    "2020 - Apr 30, 2025", "26,835 ADUs permitted", "~30,400 projects, same window",
+    "Mine ~13% higher: the structural-inventory fields capture JADUs, multifamily storage/garage conversions, and ADUs embedded in larger permits that description-based counts can miss. Same source, slightly wider net. Consistent."
+) %>% kable()
+```
+
+Sources: Crane, R. E. (2020), *Is Granny in that Flat?*, UCLA PhD dissertation
+([eScholarship](https://escholarship.org/uc/item/2wh204vz)); Brueckner, J. K. & Thomaz, S.
+(2024), "ADUs in Los Angeles: Where Are They Located and by How Much Do They Raise Property
+Value?", *Real Estate Economics* 52(3): 885–907
+([working paper](https://sites.socsci.uci.edu/~jkbrueck/ADUs.pdf)); California HCD Annual
+Progress Report Table A2 compilations
+([PermitPathLA](https://permitpath.la/data/adu-permits-by-city),
+[backyardadu.net](https://backyardadu.net/statistics/)); Crosstown LA counts as reported in
+[The Eastsider](https://www.theeastsiderla.com/neighborhoods/highland_park/a-small-building-boom-highland-park-and-eagle-rock-lead-the-eastside-in-adu-construction/article_17ec16fd-aa36-474d-a8d5-e133536284da.html).
+
+# 11. Histograms
+
+```{r hist-city, fig.height=5}
+yearly_long <- projects %>%
+  count(issue_year, outcome, wt = units, name = "units")
+
+ggplot(yearly_long, aes(factor(issue_year), units, fill = outcome)) +
+  geom_col(width = 0.78) +
+  scale_fill_manual(values = pal_outcome, name = NULL) +
+  scale_y_continuous(labels = comma) +
+  labs(title = "ADU units permitted in the City of Los Angeles, 2017-2026",
+       subtitle = "By completion status as of Nov 2026 (2026 partial year)",
+       x = NULL, y = "ADU units permitted") +
+  theme(legend.position = "top", panel.grid.major.x = element_blank())
+```
+
+```{r hist-focus, fig.height=4.5}
+focus %>%
+  count(issue_year, cpa, outcome, wt = units, name = "units") %>%
+  ggplot(aes(factor(issue_year), units, fill = outcome)) +
+  geom_col(width = 0.78) +
+  facet_wrap(~cpa) +
+  scale_fill_manual(values = pal_outcome, name = NULL) +
+  labs(title = "ADU units permitted in the three focus Community Plan Areas",
+       subtitle = "By completion status as of Nov 2026 (2026 partial year)",
+       x = NULL, y = "ADU units permitted") +
+  theme(legend.position = "top", panel.grid.major.x = element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+# 12. Maps
+
+Boundaries come straight from LA City Planning's
+[Community Plan Areas layer on GeoHub](https://geohub.lacity.org/datasets/f4e830d3882d457bb9d9241cdff0b10a_0/explore)
+(the `cpa_geojson` param queries its feature service as GeoJSON); CPA names there
+(`NAME_ALF`) match my normalized names exactly. A small number of permits lack usable
+coordinates and are noted below; everything else plots from `LAT`/`LON` of the project's
+first ADU-flagged permit.
+
+All maps sit on a light, Positron-style basemap — **Esri World Light Gray Canvas** with
+its minimal label overlay, just enough to anchor the geography — fetched as XYZ tiles by
+the small helper below; no extra packages needed beyond `png`, and no API key. (CARTO's
+own Positron tiles now require an API key for direct access.) If the tile server is
+unreachable, maps fall back to a plain background.
+For the focus CPAs, permits are drawn as **parcel polygons** (County Assessor 2025 parcel
+layer, `ASSR_PARCELS_25_View`, joined on 10-digit AIN/APN); the few projects whose APN
+doesn't match a parcel fall back to dots.
+
+```{r map-setup}
+cpa_sf <- st_read(params$cpa_geojson, quiet = TRUE) %>%
+  filter(!NAME_ALF %in% c("Port of Los Angeles", "Los Angeles International Airport"))
+
+bb <- st_bbox(cpa_sf)   # clip to the city's bounding box: a handful of permits geocode far outside LA
+pts <- projects %>%
+  filter(!is.na(lat), !is.na(lon),
+         lat >= bb["ymin"], lat <= bb["ymax"],
+         lon >= bb["xmin"], lon <= bb["xmax"]) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+cat(sprintf("Projects without usable coordinates: %s of %s\n",
+            comma(nrow(projects) - nrow(pts)), comma(nrow(projects))))
+
+## --- Light basemap helper: Esri World Light Gray Canvas (base + label overlay) ---
+## CARTO Positron-style: light grey, minimal labels; free XYZ tiles, no API key.
+lon2x <- function(lon, z) (lon + 180) / 360 * 2^z
+lat2y <- function(lat, z) (1 - log(tan(lat*pi/180) + 1/cos(lat*pi/180))/pi) / 2 * 2^z
+tile_src <- c(
+  base = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/%d/%d/%d",
+  ref  = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/%d/%d/%d")
+read_tile <- function(f) {   # Esri serves base tiles as JPEG, the label overlay as PNG
+  magic <- readBin(f, "raw", 3)
+  if (identical(magic, as.raw(c(0x89, 0x50, 0x4e)))) png::readPNG(f)
+  else if (identical(magic[1:2], as.raw(c(0xff, 0xd8)))) jpeg::readJPEG(f)
+  else stop("not an image")
+}
+light_basemap <- function(bb4326, zoom, cache_dir = "tiles") {
+  dir.create(cache_dir, showWarnings = FALSE)
+  x0 <- floor(lon2x(bb4326[["xmin"]], zoom)); x1 <- floor(lon2x(bb4326[["xmax"]], zoom))
+  y0 <- floor(lat2y(bb4326[["ymax"]], zoom)); y1 <- floor(lat2y(bb4326[["ymin"]], zoom))
+  img <- array(1, dim = c(256*(y1-y0+1), 256*(x1-x0+1), 3))   # white fallback
+  for (tx in x0:x1) for (ty in y0:y1) {
+    tile <- NULL
+    for (layer in names(tile_src)) {
+      f <- file.path(cache_dir, sprintf("%s_%d_%d_%d.png", layer, zoom, tx, ty))
+      if (!file.exists(f))   # Esri tile scheme is z/y/x
+        try(download.file(sprintf(tile_src[[layer]], zoom, ty, tx),
+                          f, mode = "wb", quiet = TRUE), silent = TRUE)
+      if (file.exists(f) && file.size(f) > 0) {
+        p <- try(read_tile(f), silent = TRUE)
+        if (!inherits(p, "try-error")) {
+          if (length(dim(p)) == 2) p <- array(rep(p, 3), dim = c(dim(p), 3))
+          if (is.null(tile)) tile <- array(1, dim = c(dim(p)[1], dim(p)[2], 3))
+          if (dim(p)[3] >= 4) {          # label overlay: alpha-composite
+            a <- p[, , 4]
+            for (ch in 1:3) tile[, , ch] <- p[, , ch]*a + tile[, , ch]*(1 - a)
+          } else tile <- p[, , 1:3]
+        }
+      }
+    }
+    if (!is.null(tile))
+      img[(ty-y0)*256 + 1:256, (tx-x0)*256 + 1:256, ] <- tile
+  }
+  R <- 6378137
+  list(img = img,
+       ext = c(xmin = (x0/2^zoom*2 - 1)*pi*R,     xmax = ((x1+1)/2^zoom*2 - 1)*pi*R,
+               ymin = (1 - (y1+1)/2^zoom*2)*pi*R, ymax = (1 - y0/2^zoom*2)*pi*R))
+}
+carto_positron <- light_basemap   # kept for compatibility
+basemap_layer <- function(bm) annotation_raster(
+  bm$img, bm$ext[["xmin"]], bm$ext[["xmax"]], bm$ext[["ymin"]], bm$ext[["ymax"]])
+# zoom so the bbox spans ~`tiles` tiles horizontally (capped)
+zoom_for <- function(bb4326, tiles = 4)
+  min(15L, max(9L, floor(log2(360 * tiles / (bb4326[["xmax"]] - bb4326[["xmin"]])))))
+carto_credit <- "Basemap: Esri World Light Gray Canvas | Esri, HERE, Garmin, (c) OpenStreetMap contributors"
+
+## --- Focus-CPA parcel polygons (County Assessor), joined to projects on AIN/APN ---
+parcels <- st_read(params$parcels_focus, quiet = TRUE) %>%
+  mutate(ain = gsub("\\D", "", AIN)) %>%
+  select(ain, parcel_cpa = cpa)
+proj_focus <- projects %>%
+  filter(cpa %in% focus_cpas) %>%
+  mutate(apn10 = gsub("\\D", "", apn))
+parcel_map <- parcels %>%
+  inner_join(select(proj_focus, apn10, cpa, issue_year, outcome, units),
+             by = c("ain" = "apn10"))
+unmatched <- proj_focus %>% filter(!apn10 %in% parcels$ain)
+cat(sprintf("Focus-CPA projects matched to a parcel polygon: %s of %s (%.1f%%)\n",
+            comma(n_distinct(parcel_map$ain)), comma(nrow(proj_focus)),
+            100 * (1 - nrow(unmatched) / nrow(proj_focus))))
+unmatched_pts <- unmatched %>%
+  filter(!is.na(lat), !is.na(lon)) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+```
+
+## 12.1 Citywide, year by year
+
+```{r map-city, fig.height=10}
+cpa_3857 <- st_transform(cpa_sf, 3857)
+pts_3857 <- st_transform(pts, 3857)
+bbc <- st_bbox(cpa_3857)
+bm_city <- carto_positron(st_bbox(cpa_sf), zoom = zoom_for(st_bbox(cpa_sf), tiles = 3))
+
+ggplot() +
+  basemap_layer(bm_city) +
+  geom_sf(data = cpa_3857, fill = NA, color = "grey45", linewidth = 0.15) +
+  geom_sf(data = pts_3857, aes(color = outcome), size = 0.15, alpha = 0.55) +
+  scale_color_manual(values = pal_outcome, name = NULL,
+                     guide = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+  facet_wrap(~issue_year, ncol = 4) +
+  coord_sf(crs = 3857, xlim = c(bbc[["xmin"]], bbc[["xmax"]]),
+           ylim = c(bbc[["ymin"]], bbc[["ymax"]]), expand = FALSE, datum = NA) +
+  labs(title = "ADU permits issued in the City of Los Angeles by year",
+       subtitle = "Each dot is one ADU project; color = completion status as of Nov 2026",
+       caption = carto_credit) +
+  theme_void() + theme(legend.position = "top")
+```
+
+## 12.2 Focus CPAs, close-up
+
+```{r map-focus, fig.height=8, results='asis'}
+for (area in focus_cpas) {
+  bdry  <- filter(cpa_sf, NAME_ALF == area)
+  bdryM <- st_transform(bdry, 3857)
+  bbm   <- st_bbox(bdryM)
+  bm    <- carto_positron(st_bbox(bdry), zoom = zoom_for(st_bbox(bdry), tiles = 4))
+  pm    <- parcel_map %>% filter(cpa == area) %>% st_transform(3857)
+  up    <- unmatched_pts %>% filter(cpa == area) %>% st_transform(3857)
+  g <- ggplot() +
+    basemap_layer(bm) +
+    geom_sf(data = bdryM, fill = NA, color = "grey35", linewidth = 0.4) +
+    geom_sf(data = pm, aes(fill = outcome), color = NA) +
+    { if (nrow(up) > 0) geom_sf(data = up, aes(color = outcome), size = 0.4, show.legend = FALSE) } +
+    scale_fill_manual(values = pal_outcome, name = NULL) +
+    scale_color_manual(values = pal_outcome, guide = "none") +
+    facet_wrap(~issue_year, ncol = 5) +
+    coord_sf(crs = 3857, xlim = c(bbm[["xmin"]], bbm[["xmax"]]),
+             ylim = c(bbm[["ymin"]], bbm[["ymax"]]), expand = FALSE, datum = NA) +
+    labs(title = paste0("ADU permits in ", area, ", by issue year"),
+         subtitle = "Shaded parcels = properties with an ADU permit; color = completion status as of Nov 2026",
+         caption = carto_credit) +
+    theme_void() + theme(legend.position = "top")
+  print(g)
+}
+```
+
+## 12.3 Parcel data note
+
+`parcels_focus.geojson` holds the parcel polygons for the three focus CPAs, pulled from
+the County Assessor's 2025 parcel layer
+(eGIS `ASSR_PARCELS_25_View`, fields `AIN`/`APN`/`UseCode`, ~0.5 m generalization) with
+one intersects-query per CPA boundary. Projects join to parcels on the 10-digit AIN/APN;
+the match rate is printed in the map-setup chunk above, and unmatched projects (bad or
+retired APNs) are drawn as dots. To swap in the City's own parcel layer instead
+([LA City Parcels on GeoHub](https://geohub.lacity.org/datasets/lahub::la-city-parcels/about),
+which joins on the city `PIN` = our `pin` column), point `params$parcels_focus` at that
+file and change the join keys — nothing else moves.
+
+# 13. GIF frames (cumulative progression)
+
+For the animations I use **cumulative** permits — each frame shows everything permitted
+through that year — which reads as growth rather than a flickering scatter. Frames are
+written as PNGs and stitched with `gifski`. Set `params$make_gifs = TRUE` (or knit with
+`rmarkdown::render("...", params = list(make_gifs = TRUE))`) to build them; at roughly one
+second per frame this adds a few minutes.
+
+```{r gifs, eval=params$make_gifs}
+# install.packages("gifski") once; without it, frames are still written to frames/
+have_gifski <- requireNamespace("gifski", quietly = TRUE)
+dir.create("frames", showWarnings = FALSE)
+years <- sort(unique(pts$issue_year))
+
+gif_one <- function(label, draw_frame) {
+  dir.create(file.path("frames", label), showWarnings = FALSE)
+  files <- character(0)
+  for (y in years) {
+    f <- file.path("frames", label, sprintf("%s_%d.png", label, y))
+    ggsave(f, draw_frame(y), width = 7, height = 7.5, dpi = 150, bg = "white")
+    files <- c(files, f)
+  }
+  if (have_gifski) {
+    gifski::gifski(files, gif_file = paste0("adu_", label, ".gif"),
+                   width = 1050, height = 1125, delay = 0.8)
+  } else message("gifski not installed - frames written to frames/", label,
+                 "; assemble them with gifski or any GIF tool")
+}
+
+# cumulative count line shown on every frame: running total, split, and that year's additions
+count_line <- function(cum_units, cum_done, cum_prog, new_units, y, place) {
+  paste0(place, "\n", comma(cum_units), " ADU units permitted through ", y,
+         " (", comma(cum_done), " completed, ", comma(cum_prog), " in progress)",
+         "  |  +", comma(new_units), " in ", y)
+}
+
+# citywide: dots over the basemap, cumulative through each year
+gif_one("citywide", function(y) {
+  cum <- filter(pts_3857, issue_year <= y)
+  sub <- count_line(sum(cum$units), sum(cum$units[cum$outcome == "Completed"]),
+                    sum(cum$units[cum$outcome == "In progress"]),
+                    sum(pts_3857$units[pts_3857$issue_year == y]), y, "City of Los Angeles")
+  ggplot() +
+    basemap_layer(bm_city) +
+    geom_sf(data = cpa_3857, fill = NA, color = "grey45", linewidth = 0.15) +
+    geom_sf(data = cum, aes(color = outcome), size = 0.2, alpha = 0.6) +
+    scale_color_manual(values = pal_outcome, name = NULL, drop = FALSE,
+                       limits = names(pal_outcome),
+                       guide = guide_legend(override.aes = list(size = 4, alpha = 1))) +
+    coord_sf(crs = 3857, xlim = c(bbc[["xmin"]], bbc[["xmax"]]),
+             ylim = c(bbc[["ymin"]], bbc[["ymax"]]), expand = FALSE, datum = NA) +
+    labs(title = paste0("ADU permits through ", y), subtitle = sub,
+         caption = carto_credit) +
+    theme_void() + theme(legend.position = "top",
+                         plot.subtitle = element_text(size = 10))
+})
+
+# focus CPAs: shaded parcels over the basemap, cumulative through each year
+for (area in focus_cpas) {
+  bdryM <- st_transform(filter(cpa_sf, NAME_ALF == area), 3857)
+  bbm   <- st_bbox(bdryM)
+  bmF   <- carto_positron(st_bbox(filter(cpa_sf, NAME_ALF == area)),
+                          zoom = zoom_for(st_bbox(filter(cpa_sf, NAME_ALF == area)), tiles = 5))
+  pmA   <- parcel_map %>% filter(cpa == area) %>% st_transform(3857)
+  upA   <- unmatched_pts %>% filter(cpa == area) %>% st_transform(3857)
+  all_units_A <- sum(pmA$units) + sum(upA$units)
+  gif_one(str_replace_all(tolower(area), "[^a-z]+", "_"), function(y) {
+    cumP <- filter(pmA, issue_year <= y)
+    cumU <- filter(upA, issue_year <= y)
+    cu <- sum(cumP$units) + sum(cumU$units)
+    cd <- sum(cumP$units[cumP$outcome == "Completed"]) + sum(cumU$units[cumU$outcome == "Completed"])
+    ny <- sum(pmA$units[pmA$issue_year == y]) + sum(upA$units[upA$issue_year == y])
+    sub <- count_line(cu, cd, cu - cd, ny, y, area)
+    ggplot() +
+      basemap_layer(bmF) +
+      geom_sf(data = bdryM, fill = NA, color = "grey35", linewidth = 0.4) +
+      geom_sf(data = cumP, aes(fill = outcome), color = NA) +
+      { if (nrow(cumU) > 0) geom_sf(data = cumU, aes(color = outcome),
+                                    size = 0.5, show.legend = FALSE) } +
+      scale_fill_manual(values = pal_outcome, name = NULL, drop = FALSE,
+                        limits = names(pal_outcome)) +
+      scale_color_manual(values = pal_outcome, guide = "none") +
+      coord_sf(crs = 3857, xlim = c(bbm[["xmin"]], bbm[["xmax"]]),
+               ylim = c(bbm[["ymin"]], bbm[["ymax"]]), expand = FALSE, datum = NA) +
+      labs(title = paste0("ADU permits through ", y), subtitle = sub,
+           caption = carto_credit) +
+      theme_void() + theme(legend.position = "top",
+                           plot.subtitle = element_text(size = 10))
+  })
+}
+```
+
+# 14. Animations
+
+Cumulative growth of ADU permits, one frame per year — citywide and in each focus CPA.
+Every frame reports the running unit total (split by completion status) and the units
+added that year. Parcels are shaded in the CPA animations; blue = completed,
+orange = in progress as of Nov 2026.
+
+```{r show-gifs, results='asis', echo=FALSE}
+gif_files <- c("adu_citywide.gif",
+               paste0("adu_", str_replace_all(tolower(focus_cpas), "[^a-z]+", "_"), ".gif"))
+shown <- FALSE
+for (g in gif_files) if (file.exists(g)) { cat(sprintf("![](%s)\n\n", g)); shown <- TRUE }
+if (!shown) cat("*Animations not built in this knit — render with `params = list(make_gifs = TRUE)` to generate them.*\n")
+```
+
+---
+
+*Pipeline decisions were set on November 7, 2026. Rebuilding from a newer LADBS refresh
+only requires updating the two file paths in the YAML params; the typo-fix list in Step 3
+should be re-checked against any project exceeding ~10 units.*

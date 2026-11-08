@@ -40,7 +40,7 @@ project exceeding ~10 units.
 ## Reproducing / updating
 
 Requires R with: `dplyr`, `tidyr`, `readr`, `stringr`, `purrr`, `tibble`, `ggplot2`,
-`lubridate`, `scales`, `sf`, `knitr`, `kableExtra`, `rmarkdown`, `png`, `gifski` —
+`lubridate`, `scales`, `sf`, `knitr`, `kableExtra`, `rmarkdown`, `png`, `jpeg`, `gifski` —
 plus Node with [StatiCrypt](https://github.com/robinmoisson/staticrypt)
 (`npm install -g staticrypt`) for the report encryption, and a `.report_password`
 file in the repo root (one line: the passphrase; it is gitignored and never committed).
