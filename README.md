@@ -7,7 +7,7 @@ agency counts, and maps/animations of ADU growth citywide and in three focus Com
 Plan Areas — **Arleta–Pacoima**, **Northeast Los Angeles**, and
 **West Adams–Baldwin Hills–Leimert**.
 
-**Read the report:** <https://gabriellacarmona.github.io/adu_permits/> *(passphrase required — ask Gabriella)*
+**Read the report:** <https://gabriellacarmona.github.io/ADU_Permits/> *(passphrase required — ask Gabriella)*
 
 Gabriella Carmona · UCLA Latino Policy & Politics Institute
 
