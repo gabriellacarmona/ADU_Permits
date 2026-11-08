@@ -651,8 +651,11 @@ light_basemap <- function(bb4326, zoom, cache_dir = "tiles") {
                ymin = (1 - (y1+1)/2^zoom*2)*pi*R, ymax = (1 - y0/2^zoom*2)*pi*R))
 }
 carto_positron <- light_basemap   # kept for compatibility
-basemap_layer <- function(bm) annotation_raster(
-  bm$img, bm$ext[["xmin"]], bm$ext[["xmax"]], bm$ext[["ymin"]], bm$ext[["ymax"]])
+basemap_layer <- function(bm, fade = 0) {   # fade: 0 = full basemap, 1 = white
+  img <- if (fade > 0) bm$img * (1 - fade) + fade else bm$img
+  annotation_raster(img, bm$ext[["xmin"]], bm$ext[["xmax"]],
+                    bm$ext[["ymin"]], bm$ext[["ymax"]])
+}
 # zoom so the bbox spans ~`tiles` tiles horizontally (capped)
 zoom_for <- function(bb4326, tiles = 4)
   min(15L, max(9L, floor(log2(360 * tiles / (bb4326[["xmax"]] - bb4326[["xmin"]])))))
@@ -686,9 +689,9 @@ bbc <- st_bbox(cpa_3857)
 bm_city <- carto_positron(st_bbox(cpa_sf), zoom = zoom_for(st_bbox(cpa_sf), tiles = 3))
 
 ggplot() +
-  basemap_layer(bm_city) +
+  basemap_layer(bm_city, fade = 0.35) +
   geom_sf(data = cpa_3857, fill = NA, color = "grey45", linewidth = 0.15) +
-  geom_sf(data = pts_3857, aes(color = outcome), size = 0.15, alpha = 0.55) +
+  geom_sf(data = pts_3857, aes(color = outcome), size = 0.3, alpha = 0.7) +
   scale_color_manual(values = pal_outcome, name = NULL,
                      guide = guide_legend(override.aes = list(size = 3, alpha = 1))) +
   facet_wrap(~issue_year, ncol = 4) +
@@ -711,10 +714,11 @@ for (area in focus_cpas) {
   pm    <- parcel_map %>% filter(cpa == area) %>% st_transform(3857)
   up    <- unmatched_pts %>% filter(cpa == area) %>% st_transform(3857)
   g <- ggplot() +
-    basemap_layer(bm) +
+    basemap_layer(bm, fade = 0.4) +
     geom_sf(data = bdryM, fill = NA, color = "grey35", linewidth = 0.4) +
-    geom_sf(data = pm, aes(fill = outcome), color = NA) +
-    { if (nrow(up) > 0) geom_sf(data = up, aes(color = outcome), size = 0.4, show.legend = FALSE) } +
+    # color stroke matches the fill, so even the smallest parcels stay visible at facet scale
+    geom_sf(data = pm, aes(fill = outcome, color = outcome), linewidth = 0.3) +
+    { if (nrow(up) > 0) geom_sf(data = up, aes(color = outcome), size = 0.7, show.legend = FALSE) } +
     scale_fill_manual(values = pal_outcome, name = NULL) +
     scale_color_manual(values = pal_outcome, guide = "none") +
     facet_wrap(~issue_year, ncol = 5) +
