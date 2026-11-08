@@ -1,0 +1,18 @@
+# Raw LADBS extracts are too large for GitHub (download from LA Open Data; see README)
+Building_and_Safety_-*.csv
+# knit intermediates
+tiles/
+frames/
+*.knit.md
+*.utf8.md
+adu_permit_pipeline_files/
+.Rproj.user/
+.Rhistory
+.DS_Store
+# keep the report content behind the password: only the ENCRYPTED docs/index.html is committed
+report_plain.html
+adu_permit_pipeline.html
+*.pdf
+figures/
+adu_*.gif
+.report_password
