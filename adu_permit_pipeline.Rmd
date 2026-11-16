@@ -2760,9 +2760,6 @@ show_compare(c("West Adams - Baldwin Hills - Leimert", "South Los Angeles", "Sou
 show_compare(c("Northeast Los Angeles", "Boyle Heights"), "Community profile: Eastside candidates")
 ```
 
-<div class="alert alert-secondary">
-**Selection reasoning.** *To be written by Gabriella: the choice in each region and the partner capacity and board input behind it.*
-</div>
 
 # Appendix
 
