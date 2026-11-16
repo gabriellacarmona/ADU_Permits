@@ -274,9 +274,16 @@ oc <- older_counts %>% filter(cpa == cc) %>% select(ct20, older = older_adu)
 tr_a5 <- tr_clip %>% left_join(tstat, by = c("CT20" = "ct20")) %>% left_join(oc, by = c("CT20" = "ct20")) %>%
   mutate(across(c(units, comp, prog, stal, older), ~ coalesce(as.numeric(.x), 0)))
 tr_a5_ll <- to_ll(tr_a5); tp_ll <- to_ll(st_point_on_surface(tr_a5))
-lab5 <- sprintf("<b>Tract %s</b><br>ADU units: %s<br>Completed: %s<br>In progress: %s<br>Stalled: %s<br>Older or unpermitted ADUs (separate): %s",
-                tr_a5_ll$LABEL, fmt(tr_a5_ll$units), fmt(tr_a5_ll$comp), fmt(tr_a5_ll$prog), fmt(tr_a5_ll$stal), fmt(tr_a5_ll$older))
+cls5 <- tract_class$class[match(tr_a5_ll$CT20, tract_class$CT20)]      # class under the rule A + B + C
+qa_add(7, paste0("ADU projects map: every tract has a class for the working-class overlay, ", cc), nrow(tr_a5_ll),
+       sum(cls5 %in% names(wc_cols)), all(cls5 %in% names(wc_cols)), stop_if_fail = TRUE)
+lab5 <- sprintf("<b>Tract %s</b><br>ADU units: %s<br>Completed: %s<br>In progress: %s<br>Stalled: %s<br>Older or unpermitted ADUs (separate): %s<br>Tract class (A + B + C): %s",
+                tr_a5_ll$LABEL, fmt(tr_a5_ll$units), fmt(tr_a5_ll$comp), fmt(tr_a5_ll$prog), fmt(tr_a5_ll$stal), fmt(tr_a5_ll$older), cls5)
+g_wc5 <- "Working-class tracts (A + B + C)"
 m5 <- leaflet_base(bm_key = cpa_key(cc)) %>% fit_to(bd) %>%
+  addMapPane("wcTracts", zIndex = 350) %>%     # below the project dots, above the basemap
+  addPolygons(data = tr_a5_ll, fillColor = wc_pal(cls5), fillOpacity = 0.55, color = "#FFFFFF", weight = 0.3, group = g_wc5,
+              options = pathOptions(pane = "wcTracts", interactive = FALSE)) %>%
   addPolygons(data = tr_a5_ll, fill = TRUE, fillColor = "#FFFFFF", fillOpacity = 0.15, color = "#555555", weight = 0.8,
               label = lapply(lab5, HTML)) %>%
   addLabelOnlyMarkers(data = tp_ll, label = fmt(tp_ll$units),
@@ -291,13 +298,15 @@ for (stt in status_levels) {
                      label = sprintf("%s: %s unit(s), issued %s", stt, d$units, d$issue_year))
 }
 m5 <- m5 %>%
-  addLayersControl(overlayGroups = status_levels, options = layersControlOptions(collapsed = FALSE)) %>%
+  addLayersControl(overlayGroups = c(status_levels, g_wc5), options = layersControlOptions(collapsed = FALSE)) %>%
+  addLegend("bottomleft", colors = unname(wc_cols), labels = names(wc_cols), title = "Tract class (A + B + C)", opacity = 0.8, group = g_wc5) %>%
+  hideGroup(g_wc5) %>%
   addLegend("bottomright", colors = unname(pal_status), labels = status_levels, title = "Status", opacity = 0.9)
 qa_add(7, paste0("ADU projects map has project points, ", cc), ">0", fmt(nrow(pts_cc)), nrow(pts_cc) > 0, stop_if_fail = TRUE)
 n_out_tr <- sum(a_cc$units[!(a_cc$ct20 %in% xw_cc$CT20)])
 tagList(tags$p(tags$b(paste0("ADU projects by status, ", cc))), m5,
         tags$p(style = "font-size: 12px;",
-               paste0("One point per project at its parcel, sized by units; tick boxes to show or hide a status. Tracts (clipped to the CPA) show total ADU units; hover for the status split and the separate count of older or unpermitted ADUs.",
+               paste0("One point per project at its parcel, sized by units; tick boxes to show or hide a status. Tick \"Working-class tracts (A + B + C)\" to shade the tracts by their class under the rule used in this analysis (working-class, other, or insufficient data). Tracts (clipped to the CPA) show total ADU units; hover for the status split, the separate count of older or unpermitted ADUs and the tract class.",
                       if (n_out_tr > 0) sprintf(" %s units sit on parcels in the CPA whose tract is assigned to another CPA; they count in the CPA totals but in no tract here.", fmt(n_out_tr)) else "",
                       " ", basemap_credit, ".")))
 ```

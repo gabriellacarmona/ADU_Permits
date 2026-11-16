@@ -1444,74 +1444,11 @@ if (!isTRUE(params$wc_rule_confirmed)) {
 }
 ```
 
-```{r stage7-prep}
-# =============================================================================
-# STAGE 7 (part 1). SHARED OBJECTS FOR THE CITYWIDE AND CPA SECTIONS
-# Every number below is built from the stage 1-6 objects; nothing is typed in.
-# =============================================================================
+```{r map-helpers}
+# Shared web-map helpers, used from here on (the citywide working-class map below,
+# the citywide section and the CPA sections).
 suppressPackageStartupMessages({ library(leaflet); library(htmltools); library(htmlwidgets); library(plotly) })
-lab_cpa <- function(x) x                                     # CPA names print as NAME_ALF
-short_cpa <- c("Arleta - Pacoima" = "Arleta - Pacoima", "West Adams - Baldwin Hills - Leimert" = "West Adams",
-               "South Los Angeles" = "South LA", "Southeast Los Angeles" = "Southeast LA",
-               "Northeast Los Angeles" = "Northeast LA", "Boyle Heights" = "Boyle Heights")
-status_levels <- names(pal_status)
-yr_end <- function(y) pmin(as.Date(paste0(y, "-12-31")), data_asof)
-
-# ---- Eligibility flags on the six-CPA parcels ---------------------------------
-prop_sf <- prop_sf %>%
-  mutate(is_sf = land_use == "Single-family",
-         is_mf = str_starts(land_use, "Multi-family"),
-         sfA = is_sf & lot_sqft >= 4500,            # row 3: eligible single-family, tier A
-         sfB_helper = is_sf & !hillside_fire,       # row 4: computed, not displayed
-         sfB = sfA & sfB_helper,                    # row 5: eligible single-family, tier B
-         mfA = is_mf & lot_sqft >= 4500,            # row 6: eligible multi-family, tier A (same 4,500 sq ft floor)
-         mfB = mfA & !hillside_fire,                # row 7: eligible multi-family, tier B
-         eligA = sfA | mfA, eligB = sfB | mfB)
-
-# ---- ADU projects with location, status and screen flags ---------------------
-adu <- adu %>%
-  mutate(status = factor(as.character(status), levels = status_levels),
-         outside_A_sf = property_type == "Single-family" & !is.na(lot_sqft) & lot_sqft < 4500,   # single-family only: kept for the earlier-run check
-         outside_B_sf = outside_A_sf | coalesce(hillside_fire, FALSE),
-         outside_A = property_type %in% c("Single-family", "Multi-family") & !is.na(lot_sqft) & lot_sqft < 4500,
-         outside_B = outside_A | coalesce(hillside_fire, FALSE))
-adu_xy <- adu %>%
-  mutate(x = pt_x, y = pt_y)
-need_ll <- is.na(adu_xy$x) & !is.na(adu_xy$lat) & adu_xy$lat != 0
-if (any(need_ll)) {
-  ll <- st_as_sf(adu_xy[need_ll, c("lon", "lat")], coords = c("lon", "lat"), crs = crs_web) %>%
-    st_transform(crs_ft) %>% st_coordinates()
-  adu_xy$x[need_ll] <- ll[, 1]; adu_xy$y[need_ll] <- ll[, 2]
-}
-adu_pts <- adu_xy %>% filter(!is.na(x), !is.na(y)) %>% st_as_sf(coords = c("x", "y"), crs = crs_ft, remove = FALSE)
-adu_focus <- adu %>% filter(cpa %in% focus_cpas)
-
-# ---- Summaries reused by the CPA sections and the selection section ----------
-land_summary <- function(cc) {
-  d <- st_drop_geometry(prop_sf) %>% filter(cpa == cc)
-  tibble(cpa = cc, area_sqft = cpa_sf$area_sqft[cpa_sf$cpa == cc],
-         r1 = nrow(d), r2 = sum(d$is_sf), r3 = sum(d$sfA), r4 = sum(d$sfB_helper), r5 = sum(d$sfB),
-         r_mf = sum(d$is_mf), r6 = sum(d$mfA), r6a = sum(d$land_use == "Multi-family, 2-4 units"),
-         r6b = sum(d$land_use == "Multi-family, 5+ units"), r7 = sum(d$mfB),
-         r8 = sum(d$eligA), r9 = sum(d$eligB), older = sum(d$older_adu, na.rm = TRUE)) %>%
-    mutate(r10 = r8 - r9)
-}
-adu_summary <- function(d) {
-  tibble(projects = nrow(d), units = sum(d$units),
-         completed = sum(d$units[d$status == "Completed"]),
-         in_progress = sum(d$units[d$status == "In progress"]),
-         stalled = sum(d$units[d$status == "Stalled"]),
-         outside_A = sum(d$units[d$outside_A]), outside_B = sum(d$units[d$outside_B]),
-         properties = n_distinct(d$prop_id[!is.na(d$prop_id)]) + sum(is.na(d$prop_id)),
-         prop_sf = n_distinct(d$prop_id[d$property_type == "Single-family"]),
-         prop_mf = n_distinct(d$prop_id[d$property_type == "Multi-family" & !is.na(d$prop_id)]) +
-           sum(d$property_type == "Multi-family" & is.na(d$prop_id)),
-         units_sf = sum(d$units[d$property_type == "Single-family"]),
-         units_mf = sum(d$units[d$property_type == "Multi-family"]))
-}
-land_tbl <- map_dfr(focus_cpas, land_summary)
-adu_tbl  <- map_dfr(focus_cpas, function(cc) adu_summary(filter(adu_focus, cpa == cc)) %>% mutate(cpa = cc))
-
+city_fit_sf <- cpa_sf %>% filter(!cpa %in% c("Port of Los Angeles", "Los Angeles International Airport"))   # opening extent of the citywide maps
 # ---- Map helpers --------------------------------------------------------------
 bm_for <- function(geom_ft, tiles = 4) {
   bb <- st_bbox(st_transform(geom_ft, crs_web))
@@ -1549,7 +1486,7 @@ for (cc in focus_cpas) {
   bm_store[[cpa_key(cc)]] <- bm_embed(st_buffer(frame_cc, 5280), tiles = 5)
 }
 n_blank <- sum(vapply(bm_store, `[[`, TRUE, "blank"))
-qa_add(7, "Embedded basemap images built for the City and the six CPAs (none blank)", "0 blank",
+qa_add(6, "Embedded basemap images built for the City and the six CPAs (none blank)", "0 blank",
        paste(n_blank, "blank"), n_blank == 0,
        reason = if (n_blank > 0) "The Esri tiles could not be fetched when the report was knit (offline?). The web maps still show the live tiles when the page is opened online." else NA_character_)
 add_bm <- function(m, key) {
@@ -1627,6 +1564,294 @@ cat("<script>window.aduBasemaps = ",
     ";</script>\n", sep = "")
 ```
 
+### Working-class census tracts across Los Angeles, by definition
+
+The map applies the rule and the two alternatives from the table above to every census tract in the City, so the effect of each choice can be seen across Los Angeles and not only in the six candidate CPAs. Use the control to switch definitions, to show the tracts whose class changes under an alternative, or to show which tests the other tracts fail under the rule.
+
+```{r wc-city-map}
+pat_levels <- c("Fails income (C) only", "Fails income and one of education or occupation",
+                "Fails all three tests", "Fails education or occupation, passes income")
+pat_cols <- setNames(c("#9ECAE1", "#4292C6", "#08306B", "#74C476"), pat_levels)
+cls3 <- function(ins, wc) case_when(ins ~ "Insufficient data", wc %in% TRUE ~ "Working-class", TRUE ~ "Other")
+chg_levels <- c("Working-class under all three definitions", "Not working-class under all three",
+                "Changes with industry B only", "Changes with household-income C only", "Changes with both alternatives",
+                "Insufficient data under the rule")
+chg_cols <- setNames(c("#E8C9B5", "#C6DBEF", "#7B3294", "#008837", "#D7191C", "#D9D9D9"), chg_levels)
+tc_city <- tract_class_city %>%
+  mutate(pattern = case_when(class != "Other" ~ NA_character_,
+                             !test_A & !test_B & !test_C ~ "Fails all three tests",
+                             !test_C & test_A & test_B ~ "Fails income (C) only",
+                             test_C ~ "Fails education or occupation, passes income",
+                             TRUE ~ "Fails income and one of education or occupation"),
+         class_ind = cls3(insufficient, wc_ind), class_hh = cls3(insufficient_hh, wc_hh),
+         d_ind = class_ind != class, d_hh = class_hh != class,
+         change = case_when(class == "Insufficient data" ~ chg_levels[6],
+                            d_ind & d_hh ~ chg_levels[5], d_ind ~ chg_levels[3], d_hh ~ chg_levels[4],
+                            class == "Working-class" ~ chg_levels[1], TRUE ~ chg_levels[2]))
+qa_add(6, "Citywide working-class map: every classifiable City tract has all three test results", "0 missing",
+       paste(sum(tc_city$class != "Insufficient data" & (is.na(tc_city$test_A) | is.na(tc_city$test_B) | is.na(tc_city$test_C))), "missing"),
+       !any(tc_city$class != "Insufficient data" & (is.na(tc_city$test_A) | is.na(tc_city$test_B) | is.na(tc_city$test_C))),
+       stop_if_fail = TRUE)
+qa_add(6, "Citywide working-class map: failure patterns cover every other tract exactly once", sum(tc_city$class == "Other"),
+       sum(!is.na(tc_city$pattern)), sum(!is.na(tc_city$pattern)) == sum(tc_city$class == "Other"), stop_if_fail = TRUE)
+six_def <- tc_city %>% filter(cpa %in% focus_cpas)
+qa_add(6, "Citywide working-class map: working-class tracts in the six CPAs under each definition match the sensitivity table (rule / industry B / household-income C)",
+       paste(sens_total$`Working-class: A + B + C (rule used)`, sens_total$`Working-class with industry B`,
+             sens_total$`Working-class with household-income C`, sep = " / "),
+       paste(sum(six_def$class == "Working-class"), sum(six_def$class_ind == "Working-class"), sum(six_def$class_hh == "Working-class"), sep = " / "),
+       sum(six_def$class == "Working-class") == sens_total$`Working-class: A + B + C (rule used)` &&
+         sum(six_def$class_ind == "Working-class") == sens_total$`Working-class with industry B` &&
+         sum(six_def$class_hh == "Working-class") == sens_total$`Working-class with household-income C`, stop_if_fail = TRUE)
+qa_add(6, "Citywide working-class map: the change categories cover every City tract exactly once", nrow(tc_city),
+       sum(tc_city$change %in% chg_levels), all(tc_city$change %in% chg_levels), stop_if_fail = TRUE)
+c5_sf <- tracts_sf %>% select(CT20, LABEL) %>% inner_join(tc_city, by = "CT20") %>%
+  st_simplify(preserveTopology = TRUE, dTolerance = 30) %>% to_ll(digits = 5)
+qa_add(6, "Citywide working-class map has every City tract", nrow(city_xwalk), nrow(c5_sf), nrow(c5_sf) == nrow(city_xwalk), stop_if_fail = TRUE)
+fill_why <- case_when(c5_sf$class == "Working-class" ~ "#F3D5BF",
+                      c5_sf$class == "Insufficient data" ~ "#D9D9D9",
+                      TRUE ~ unname(pat_cols[c5_sf$pattern]))
+gid <- function(v) as.list(setNames(v, c5_sf$GEOID))
+cols_c5 <- list(rec = gid(wc_pal(c5_sf$class)), ind = gid(wc_pal(c5_sf$class_ind)), hh = gid(wc_pal(c5_sf$class_hh)),
+                chg = gid(unname(chg_cols[c5_sf$change])), why = gid(fill_why))
+few_c5 <- (c5_sf$estimate_pop < 100) %in% TRUE | is.na(c5_sf$estimate_pop)
+alt_hover <- paste0(
+  "<br><b>Alt. B. Workers in construction, manufacturing, trade,</b><br><b>&nbsp;&nbsp;&nbsp;&nbsp;transportation, hospitality and other services industries</b><br>",
+  ifelse(few_c5 | is.na(c5_sf$share_ind), "n/a", paste0(fmt(100 * c5_sf$share_ind, 1), "%")), " &middot; needs 50% or more &middot; ",
+  mark(ifelse(few_c5, NA, c5_sf$test_B_ind)),
+  "<br><b>Alt. C. Median household income &divide; county median</b><br>",
+  ifelse(is.na(c5_sf$mhi), "not published", paste0("$", fmt(c5_sf$mhi), " &divide; $", fmt(county_mhi), " = ", fmt(c5_sf$mhi_ratio, 2))),
+  " &middot; needs under 1.00 &middot; ", mark(c5_sf$test_C_hh),
+  "<br><b>Class by definition</b>: A + B + C: ", c5_sf$class, " &middot; industry B: ", c5_sf$class_ind,
+  " &middot; household-income C: ", c5_sf$class_hh)
+bl_ll <- c5_sf %>% filter(class != "Insufficient data", borderline %in% TRUE)
+m_c5 <- leaflet_base(height = 660, bm_key = "city") %>% fit_to(city_fit_sf) %>%
+  addPolygons(data = c5_sf, layerId = ~GEOID, fillColor = wc_pal(c5_sf$class), fillOpacity = 0.7, color = "#FFFFFF", weight = 0.4,
+              label = lapply(paste0(wc_hover(c5_sf, cpa_name = c5_sf$cpa), alt_hover), HTML), group = "c5") %>%
+  addPolygons(data = bl_ll, fill = FALSE, color = "#222222", weight = 1.2, dashArray = "3,3",
+              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
+  addPolygons(data = to_ll(st_simplify(cpa_sf, preserveTopology = TRUE, dTolerance = 50), digits = 5),
+              fill = FALSE, color = "#555555", weight = 0.7,
+              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
+  addPolygons(data = to_ll(filter(cpa_sf, cpa %in% focus_cpas), digits = 5), fill = FALSE, color = "black", weight = 2.2,
+              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
+  addLegend("bottomright", colors = unname(wc_cols), labels = names(wc_cols), opacity = 0.8,
+            title = "Tract class", className = "info legend leg-cls") %>%
+  addLegend("bottomright", colors = unname(chg_cols), labels = names(chg_cols), opacity = 0.8,
+            title = "Class under the rule and the two alternatives", className = "info legend leg-chg") %>%
+  addLegend("bottomright", colors = c("#F3D5BF", unname(pat_cols), "#D9D9D9"),
+            labels = c("Working-class", pat_levels, "Insufficient data"), opacity = 0.8,
+            title = "Why a tract is not working-class (A + B + C)", className = "info legend leg-why") %>%
+  onRender("
+    function(el, x, data) {
+      var map = this, nm = el.id;
+      var opts = [['rec', 'A + B + C (rule used)'], ['ind', 'Industry in place of occupation (alt. B)'],
+                  ['hh', 'Household income against the county median (alt. C)']];
+      var cmp = [['chg', 'Tracts that change class under an alternative'], ['why', 'A + B + C: which tests other tracts fail']];
+      var ctrl = L.control({position: 'topright'});
+      ctrl.onAdd = function() {
+        var div = L.DomUtil.create('div', 'leaflet-bar');
+        div.style.background = 'white'; div.style.padding = '6px 8px'; div.style.fontSize = '12px'; div.style.maxWidth = '290px';
+        var h = '<b>Working-class definition</b><br>';
+        opts.forEach(function(o, i) { h += '<label><input type=\"radio\" name=\"' + nm + '_v\" value=\"' + o[0] + '\"' + (i === 0 ? ' checked' : '') + '> ' + o[1] + '</label><br>'; });
+        h += '<b>Compare</b><br>';
+        cmp.forEach(function(o) { h += '<label><input type=\"radio\" name=\"' + nm + '_v\" value=\"' + o[0] + '\"> ' + o[1] + '</label><br>'; });
+        h += '<div class=\"wc-n\" style=\"margin-top:4px; color:#444;\"></div>';
+        div.innerHTML = h; L.DomEvent.disableClickPropagation(div);
+        return div;
+      };
+      ctrl.addTo(map);
+      function update() {
+        var v = el.querySelector('input[name=\"' + nm + '_v\"]:checked').value;
+        var cols = data.cols[v];
+        Object.keys(cols).forEach(function(id) {
+          var l = map.layerManager.getLayer('shape', id);
+          if (l) l.setStyle({fillColor: cols[id]});
+        });
+        var leg = (v === 'chg' || v === 'why') ? v : 'cls';
+        ['cls', 'chg', 'why'].forEach(function(k) {
+          el.querySelectorAll('.leg-' + k).forEach(function(d) { d.style.display = k === leg ? '' : 'none'; });
+        });
+        el.querySelector('.wc-n').innerHTML = data.counts[v] || '';
+      }
+      el.addEventListener('change', update);
+      update();
+    }", data = list(cols = cols_c5, counts = list(
+      rec = sprintf("%s working-class, %s other, %s no class", fmt(sum(tc_city$class == "Working-class")), fmt(sum(tc_city$class == "Other")), fmt(sum(tc_city$class == "Insufficient data"))),
+      ind = sprintf("%s working-class, %s other, %s no class", fmt(sum(tc_city$class_ind == "Working-class")), fmt(sum(tc_city$class_ind == "Other")), fmt(sum(tc_city$class_ind == "Insufficient data"))),
+      hh = sprintf("%s working-class, %s other, %s no class", fmt(sum(tc_city$class_hh == "Working-class")), fmt(sum(tc_city$class_hh == "Other")), fmt(sum(tc_city$class_hh == "Insufficient data"))),
+      chg = sprintf("%s tracts change class under at least one alternative", fmt(sum(tc_city$change %in% chg_levels[3:5]))))))
+def_row <- function(lab, cl) {
+  tibble(Definition = lab, `Working-class` = fmt(sum(cl == "Working-class")), Other = fmt(sum(cl == "Other")),
+         `No class (insufficient data)` = fmt(sum(cl == "Insufficient data")),
+         `Working-class here, not under the rule` = fmt(sum(cl == "Working-class" & tc_city$class != "Working-class")),
+         `Working-class under the rule, not here` = fmt(sum(cl != "Working-class" & tc_city$class == "Working-class")),
+         `Working-class in the six candidate CPAs` = fmt(sum(cl == "Working-class" & tc_city$cpa %in% focus_cpas)))
+}
+def_tab <- bind_rows(def_row("A + B + C (rule used)", tc_city$class),
+                     def_row("Industry in place of occupation (alt. B)", tc_city$class_ind),
+                     def_row("Household income against the county median (alt. C)", tc_city$class_hh))
+tagList(tags$p(tags$b("Working-class census tracts in Los Angeles under each definition")),
+        m_c5,
+        tags$p(style = "font-size: 12px;",
+               paste0("Choose a definition in the control to reclassify every tract; the two \"Compare\" views show the tracts whose class changes under an alternative, and which tests the other tracts fail under the rule. ",
+                      "Hover over a tract for its values on tests A, B and C and on the two alternative measures, each marked pass or fail, and its class under each definition. ",
+                      "Tracts with at least 50% of their land in the City (", fmt(nrow(city_xwalk)), "), drawn in full and labeled with the CPA holding most of their land. ",
+                      "Dashed outline: borderline under the rule (the 90% interval for A or B includes 50%). ",
+                      "Black outline: six candidate CPAs; grey lines: other CPAs. ACS 2020–2024 5-year. ", basemap_credit, ".")))
+def_tab %>%
+  tbl(caption = "City census tracts by class under the rule and the two alternatives (census tracts)",
+      note = paste0("City tracts: ", fmt(nrow(tc_city)), ". Alt. B replaces the occupation test with the industry measure; alt. C replaces family income against the metro median with household income against the county median ($",
+                    fmt(county_mhi), "). No class: under 100 residents, or no published median for the income measure the definition uses."),
+      align = c("l", rep("r", 6)))
+```
+
+### Working Class Definition (A+B+C) in Application in Los Angeles
+
+```{r wc-app-data}
+n_city <- nrow(tc_city); n_wc_c <- sum(tc_city$class == "Working-class")
+n_oth_c <- sum(tc_city$class == "Other"); n_ins_c <- sum(tc_city$class == "Insufficient data")
+n_fail <- c(A = sum(tc_city$class == "Other" & !tc_city$test_A), B = sum(tc_city$class == "Other" & !tc_city$test_B),
+            C = sum(tc_city$class == "Other" & !tc_city$test_C))
+pat_n <- function(d, p) sum(d$pattern %in% p)
+top_cpas <- function(p, k = 3) {
+  tc_city %>% filter(pattern %in% p) %>% count(cpa, sort = TRUE) %>% slice_head(n = k) %>%
+    summarise(txt = paste0(cpa, " (", n, ")", collapse = "; ")) %>% pull(txt)
+}
+six_oth <- tc_city %>% filter(cpa %in% focus_cpas, class == "Other")
+n_bl_oth <- sum(tc_city$class == "Other" & tc_city$borderline %in% TRUE)
+near_A <- abs(tc_city$share_no_ba - 0.5) <= tc_city$moe_ba; near_B <- abs(tc_city$share_occ - 0.5) <= tc_city$moe_occ
+could_wc <- tc_city$class == "Other" & tc_city$test_C & (tc_city$test_A | near_A) & (tc_city$test_B | near_B)   # pass C; miss A or B only within the MOE
+n_could <- sum(could_wc, na.rm = TRUE); n_could_six <- sum(could_wc & tc_city$cpa %in% focus_cpas, na.rm = TRUE)
+n_bl_failC <- sum(tc_city$class == "Other" & tc_city$borderline %in% TRUE & !tc_city$test_C)
+```
+
+Of the `r fmt(n_city)` census tracts in the City, `r fmt(n_wc_c)` (`r pct(n_wc_c / (n_city - n_ins_c))` of those with data) are working-class, `r fmt(n_oth_c)` are other, and `r n_ins_c` have too few residents or no published median family income to classify. Of the `r fmt(n_oth_c)` other tracts, `r fmt(n_fail[["C"]])` fail the income test (median family income at or above the metro median of $`r fmt(metro_mfi)`), `r fmt(n_fail[["A"]])` fail the education test and `r fmt(n_fail[["B"]])` fail the occupation test. The tests overlap heavily: `r fmt(pat_n(tc_city, "Fails all three tests"))` other tracts fail all three. Only `r fmt(n_could)` other tracts (`r n_could_six` of them in the six candidate CPAs) pass the income test and miss A or B by no more than the margin of error, so their class could change with a different sample. More other tracts, `r fmt(n_bl_oth)`, are borderline on A or B, but `r fmt(n_bl_failC)` of them also fail the income test, so the margin of error on A or B does not change their class. In the six candidate CPAs, `r nrow(six_oth)` tracts are other: `r pat_n(six_oth, "Fails all three tests")` fail all three tests, `r pat_n(six_oth, "Fails income (C) only")` fail only the income test, `r pat_n(six_oth, "Fails income and one of education or occupation")` fail income and one other test, and `r pat_n(six_oth, "Fails education or occupation, passes income")` pass income but fail education or occupation.
+
+```{r wc-app-table}
+tibble(Pattern = pat_levels) %>%
+  mutate(`What it means` = c("At least half of adults lack a bachelor's degree and at least half of workers hold the occupations in test B, but median family income is at or above the metro median",
+                             "Median family income is at or above the metro median, and either more than half of adults hold a bachelor's degree or more than half of workers hold other jobs, not both",
+                             "More than half of adults hold a bachelor's degree, more than half of workers hold other jobs, and median family income is at or above the metro median",
+                             "Median family income is below the metro median, but more than half of adults hold a bachelor's degree, more than half of workers hold other jobs, or both"),
+         `City tracts` = map_int(Pattern, ~ pat_n(tc_city, .x)),
+         `Six candidate CPAs` = map_int(Pattern, ~ pat_n(six_oth, .x)),
+         `CPAs with the most (tracts)` = map_chr(Pattern, top_cpas)) %>%
+  tbl(caption = "Why tracts are not working-class: which tests other tracts fail (census tracts)",
+      note = "\"Other jobs\" are management, business, science and arts occupations, the ACS group not counted in test B. Every other tract falls in exactly one row.")
+```
+
+```{r wc-app-venn, fig.width=11, fig.height=5.6}
+# Venn diagram: which of the three tests the tracts that are not working-class fail
+venn_counts <- function(d, where) {
+  d <- d %>% filter(class == "Other"); fa <- !d$test_A; fb <- !d$test_B; fc <- !d$test_C
+  tibble(panel = where,
+         region = c("A", "B", "C", "AB", "AC", "BC", "ABC"),
+         n = c(sum(fa & !fb & !fc), sum(!fa & fb & !fc), sum(!fa & !fb & fc), sum(fa & fb & !fc),
+               sum(fa & !fb & fc), sum(!fa & fb & fc), sum(fa & fb & fc)),
+         x = c(-1.05, 1.05, 0, 0, -0.68, 0.68, 0), y = c(0.62, 0.62, -1.18, 0.82, -0.36, -0.36, 0.05),
+         tot_A = sum(fa), tot_B = sum(fb), tot_C = sum(fc), n_other = nrow(d))
+}
+vn <- bind_rows(venn_counts(tc_city, "City of Los Angeles"), venn_counts(filter(tc_city, cpa %in% focus_cpas), "Six candidate CPAs")) %>%
+  mutate(panel = factor(panel, levels = c("City of Los Angeles", "Six candidate CPAs")))
+vn_tot <- vn %>% group_by(panel) %>% summarise(n_sum = sum(n), n_other = first(n_other), tot_A = first(tot_A), tot_B = first(tot_B), tot_C = first(tot_C), .groups = "drop")
+qa_add(6, "Venn diagram: the seven regions sum to the tracts that are not working-class (City / six CPAs)",
+       paste(vn_tot$n_other, collapse = " / "), paste(vn_tot$n_sum, collapse = " / "), all(vn_tot$n_sum == vn_tot$n_other), stop_if_fail = TRUE)
+qa_add(6, "Venn diagram: City and six-CPA totals match the write-up above", paste(n_oth_c, nrow(six_oth), sep = " / "),
+       paste(vn_tot$n_other, collapse = " / "), vn_tot$n_other[1] == n_oth_c && vn_tot$n_other[2] == nrow(six_oth), stop_if_fail = TRUE)
+circ <- function(cx, cy, set) { th <- seq(0, 2 * pi, length.out = 181); tibble(x = cx + cos(th), y = cy + sin(th), set = set) }
+circles <- bind_rows(circ(-0.5, 0.3, "A"), circ(0.5, 0.3, "B"), circ(0, -0.55, "C"))
+circles <- bind_rows(mutate(circles, panel = levels(vn$panel)[1]), mutate(circles, panel = levels(vn$panel)[2])) %>%
+  mutate(panel = factor(panel, levels = levels(vn$panel)))
+set_lab <- vn_tot %>% rowwise() %>% reframe(panel,
+  x = c(-1.25, 1.25, 0), y = c(1.52, 1.52, -1.78),
+  label = c(paste0("Fails A: education\n(", fmt(tot_A), " tracts)"), paste0("Fails B: occupation\n(", fmt(tot_B), " tracts)"),
+            paste0("Fails C: income\n(", fmt(tot_C), " tracts)")))
+ggplot() +
+  geom_polygon(data = circles, aes(x, y, group = set, fill = set), alpha = 0.28, color = "grey25", linewidth = 0.5) +
+  geom_text(data = vn, aes(x, y, label = fmt(n)), size = 5, fontface = "bold") +
+  geom_text(data = set_lab, aes(x, y, label = label), size = 3.6, lineheight = 0.95) +
+  geom_text(data = vn_tot, aes(x = 0, y = -2.25, label = paste0(fmt(n_other), " tracts are not working-class")), size = 3.6, fontface = "italic") +
+  scale_fill_manual(values = c(A = "#4C78A8", B = "#F58518", C = "#54A24B"), guide = "none") +
+  facet_wrap(~panel) + coord_equal(xlim = c(-2.2, 2.2), ylim = c(-2.4, 1.85)) +
+  labs(title = "Which tests do the tracts that are not working-class fail?",
+       caption = paste0("Each tract that is not working-class fails at least one test; a number in an overlap counts tracts that fail both (or all three) tests.\n",
+                        "A: under 50% of adults lack a bachelor's degree. B: under 50% of workers hold the occupations in test B. C: median family income at or above the metro median.\n",
+                        "Working-class tracts pass all three tests and sit outside the circles. Circle sizes are not to scale. ACS 2020–2024 5-year.")) +
+  theme_void() + theme(plot.title = element_text(face = "bold", size = 13), strip.text = element_text(face = "bold", size = 12),
+                       plot.caption = element_text(size = 8.5, hjust = 0, lineheight = 1.1))
+```
+
+
+```{r stage7-prep}
+# =============================================================================
+# STAGE 7 (part 1). SHARED OBJECTS FOR THE CITYWIDE AND CPA SECTIONS
+# Every number below is built from the stage 1-6 objects; nothing is typed in.
+# =============================================================================
+suppressPackageStartupMessages({ library(leaflet); library(htmltools); library(htmlwidgets); library(plotly) })
+lab_cpa <- function(x) x                                     # CPA names print as NAME_ALF
+short_cpa <- c("Arleta - Pacoima" = "Arleta - Pacoima", "West Adams - Baldwin Hills - Leimert" = "West Adams",
+               "South Los Angeles" = "South LA", "Southeast Los Angeles" = "Southeast LA",
+               "Northeast Los Angeles" = "Northeast LA", "Boyle Heights" = "Boyle Heights")
+status_levels <- names(pal_status)
+yr_end <- function(y) pmin(as.Date(paste0(y, "-12-31")), data_asof)
+
+# ---- Eligibility flags on the six-CPA parcels ---------------------------------
+prop_sf <- prop_sf %>%
+  mutate(is_sf = land_use == "Single-family",
+         is_mf = str_starts(land_use, "Multi-family"),
+         sfA = is_sf & lot_sqft >= 4500,            # row 3: eligible single-family, tier A
+         sfB_helper = is_sf & !hillside_fire,       # row 4: computed, not displayed
+         sfB = sfA & sfB_helper,                    # row 5: eligible single-family, tier B
+         mfA = is_mf & lot_sqft >= 4500,            # row 6: eligible multi-family, tier A (same 4,500 sq ft floor)
+         mfB = mfA & !hillside_fire,                # row 7: eligible multi-family, tier B
+         eligA = sfA | mfA, eligB = sfB | mfB)
+
+# ---- ADU projects with location, status and screen flags ---------------------
+adu <- adu %>%
+  mutate(status = factor(as.character(status), levels = status_levels),
+         outside_A_sf = property_type == "Single-family" & !is.na(lot_sqft) & lot_sqft < 4500,   # single-family only: kept for the earlier-run check
+         outside_B_sf = outside_A_sf | coalesce(hillside_fire, FALSE),
+         outside_A = property_type %in% c("Single-family", "Multi-family") & !is.na(lot_sqft) & lot_sqft < 4500,
+         outside_B = outside_A | coalesce(hillside_fire, FALSE))
+adu_xy <- adu %>%
+  mutate(x = pt_x, y = pt_y)
+need_ll <- is.na(adu_xy$x) & !is.na(adu_xy$lat) & adu_xy$lat != 0
+if (any(need_ll)) {
+  ll <- st_as_sf(adu_xy[need_ll, c("lon", "lat")], coords = c("lon", "lat"), crs = crs_web) %>%
+    st_transform(crs_ft) %>% st_coordinates()
+  adu_xy$x[need_ll] <- ll[, 1]; adu_xy$y[need_ll] <- ll[, 2]
+}
+adu_pts <- adu_xy %>% filter(!is.na(x), !is.na(y)) %>% st_as_sf(coords = c("x", "y"), crs = crs_ft, remove = FALSE)
+adu_focus <- adu %>% filter(cpa %in% focus_cpas)
+
+# ---- Summaries reused by the CPA sections and the selection section ----------
+land_summary <- function(cc) {
+  d <- st_drop_geometry(prop_sf) %>% filter(cpa == cc)
+  tibble(cpa = cc, area_sqft = cpa_sf$area_sqft[cpa_sf$cpa == cc],
+         r1 = nrow(d), r2 = sum(d$is_sf), r3 = sum(d$sfA), r4 = sum(d$sfB_helper), r5 = sum(d$sfB),
+         r_mf = sum(d$is_mf), r6 = sum(d$mfA), r6a = sum(d$land_use == "Multi-family, 2-4 units"),
+         r6b = sum(d$land_use == "Multi-family, 5+ units"), r7 = sum(d$mfB),
+         r8 = sum(d$eligA), r9 = sum(d$eligB), older = sum(d$older_adu, na.rm = TRUE)) %>%
+    mutate(r10 = r8 - r9)
+}
+adu_summary <- function(d) {
+  tibble(projects = nrow(d), units = sum(d$units),
+         completed = sum(d$units[d$status == "Completed"]),
+         in_progress = sum(d$units[d$status == "In progress"]),
+         stalled = sum(d$units[d$status == "Stalled"]),
+         outside_A = sum(d$units[d$outside_A]), outside_B = sum(d$units[d$outside_B]),
+         properties = n_distinct(d$prop_id[!is.na(d$prop_id)]) + sum(is.na(d$prop_id)),
+         prop_sf = n_distinct(d$prop_id[d$property_type == "Single-family"]),
+         prop_mf = n_distinct(d$prop_id[d$property_type == "Multi-family" & !is.na(d$prop_id)]) +
+           sum(d$property_type == "Multi-family" & is.na(d$prop_id)),
+         units_sf = sum(d$units[d$property_type == "Single-family"]),
+         units_mf = sum(d$units[d$property_type == "Multi-family"]))
+}
+land_tbl <- map_dfr(focus_cpas, land_summary)
+adu_tbl  <- map_dfr(focus_cpas, function(cc) adu_summary(filter(adu_focus, cpa == cc)) %>% mutate(cpa = cc))
+
+```
+
 # Citywide
 
 The citywide section covers every Community Plan Area. Each project is assigned to the CPA of its parcel (APN, then City PIN, then coordinates), and to the permit's CPA text only when no parcel is found. `r fmt(nrow(adu))` ADU projects adding `r fmt(sum(adu$units))` units were issued from `r window_label`.
@@ -1644,7 +1869,7 @@ c1 <- adu %>%
   mutate(share = completed / units)
 c1_tot <- c1 %>% summarise(across(c(projects, units, completed, in_progress, stalled), sum)) %>%
   mutate(issue_year = NA, share = completed / units)
-qa_add(7, "C1: completed + in progress + stalled = units, every year", "all years", "checked",
+qa_add(7, "Units by year and status: completed + in progress + stalled = units, every year", "all years", "checked",
        all(c1$completed + c1$in_progress + c1$stalled == c1$units), stop_if_fail = TRUE)
 bind_rows(c1, c1_tot) %>%
   transmute(`Issue year` = case_when(is.na(issue_year) ~ "Total",
@@ -1728,10 +1953,10 @@ c3s <- cpa_join %>% left_join(sf_den, by = "cpa") %>%
          done = ifelse(all_u > 0, comp_u / all_u, NA_real_))
 chk_p100 <- c3s %>% st_drop_geometry() %>% select(cpa, p100_all) %>%
   inner_join(select(standings, cpa, per100), by = "cpa")
-qa_add(7, "C3 share map: units per 100 single-family parcels match the C2 standings, every CPA",
+qa_add(7, "CPA units map: units per 100 single-family parcels match the CPA standings, every CPA",
        paste(nrow(c3s), "CPAs"), paste(sum(abs(chk_p100$p100_all - chk_p100$per100) < 1e-9), "match"),
        nrow(chk_p100) == nrow(c3s) && all(abs(chk_p100$p100_all - chk_p100$per100) < 1e-9), stop_if_fail = TRUE)
-qa_add(7, "C3 share map: CPA shares of City units sum to at most 100%", "<= 100%",
+qa_add(7, "CPA units map: CPA shares of City units sum to at most 100%", "<= 100%",
        pct(sum(c3s$sh_all)), sum(c3s$sh_all) <= 1 + 1e-9 && sum(c3s$sh_comp) <= 1 + 1e-9, stop_if_fail = TRUE)
 nice_brks <- function(v, step) {      # six bins from quantiles, rounded to a readable step
   q <- unique(round(quantile(v, probs = seq(1/6, 5/6, length.out = 5), na.rm = TRUE) / step) * step)
@@ -1800,7 +2025,7 @@ m_c3 <- leaflet_base(height = 620, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
       el.addEventListener('change', update);
       update();
     }", data = list(cols = cols_c3))
-qa_add(7, "C3 map: unit counts on the map sum to the mapped CPAs' units", fmt(sum(cum_by_cpa$all_u)), fmt(sum(c3s$all_u)),
+qa_add(7, "CPA units map: unit counts on the map sum to the mapped CPAs' units", fmt(sum(cum_by_cpa$all_u)), fmt(sum(c3s$all_u)),
        sum(c3s$all_u) == sum(cum_by_cpa$all_u) && sum(c3s$comp_u) == sum(cum_by_cpa$comp_u), stop_if_fail = TRUE)
 tagList(tags$p(tags$b(paste0("ADU units by Community Plan Area, ", window_label))),
         m_c3,
@@ -1823,17 +2048,32 @@ c4_data <- list(lat = round(xy4[, 2], 5), lng = round(xy4[, 1], 5),
                 years = c4_years, cols = unname(pal_status), stat = names(pal_status),
                 last_label = paste0(year(data_asof), " (to ", str_squish(format(data_asof, "%b %e")), ")"))
 n_nopt <- nrow(adu) - nrow(p4)
-qa_add(7, "C4 slider map: mapped projects + projects without a point = all projects", fmt(nrow(adu)),
+qa_add(7, "Year-slider map: mapped projects + projects without a point = all projects", fmt(nrow(adu)),
        fmt(nrow(p4) + n_nopt), nrow(p4) > 0 && n_nopt >= 0 && !anyNA(c4_data$st) && !anyNA(c4_data$yr), stop_if_fail = TRUE)
 c4_chk <- st_drop_geometry(p4) %>% count(issue_year, wt = units, name = "u") %>%
   inner_join(c1 %>% select(issue_year, units), by = "issue_year")
-qa_add(7, "C4 slider map: units by issue year do not exceed the C1 table in any year", "all years",
+qa_add(7, "Year-slider map: units by issue year do not exceed the units by year table in any year", "all years",
        paste(sum(c4_chk$u <= c4_chk$units), "of", nrow(c4_chk)), all(c4_chk$u <= c4_chk$units), stop_if_fail = TRUE)
+# Working-class overlay (rule A + B + C), switched on from the layers control
+wc_ov_group <- "Working-class tracts (A + B + C)"
+wc_ov_sf <- tracts_sf %>% select(CT20) %>% inner_join(select(tract_class_city, CT20, class), by = "CT20") %>%
+  st_simplify(preserveTopology = TRUE, dTolerance = 60) %>% to_ll(digits = 5)
+qa_add(7, "Year-slider map: the working-class overlay has every City tract, with the classes of the citywide working-class map",
+       paste(nrow(city_xwalk), sum(tc_city$class == "Working-class"), sep = " / "),
+       paste(nrow(wc_ov_sf), sum(wc_ov_sf$class == "Working-class"), sep = " / "),
+       nrow(wc_ov_sf) == nrow(city_xwalk) && sum(wc_ov_sf$class == "Working-class") == sum(tc_city$class == "Working-class"), stop_if_fail = TRUE)
 m_c4 <- leaflet_base(height = 640, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
   addPolygons(data = to_ll(st_simplify(cpa_sf, preserveTopology = TRUE, dTolerance = 50), digits = 5),
               fillColor = "#FFFFFF", fillOpacity = 0.01, color = "#555555", weight = 0.7, label = ~cpa) %>%
   addPolygons(data = to_ll(filter(cpa_sf, cpa %in% focus_cpas), digits = 5), fill = FALSE, color = "black", weight = 2,
               options = pathOptions(interactive = FALSE)) %>%
+  addMapPane("wcTracts", zIndex = 350) %>%     # below the project dots, above the basemap
+  addPolygons(data = wc_ov_sf, fillColor = wc_pal(wc_ov_sf$class), fillOpacity = 0.55, color = "#FFFFFF", weight = 0.3,
+              group = wc_ov_group, options = pathOptions(pane = "wcTracts", interactive = FALSE)) %>%
+  addLegend("bottomleft", colors = unname(wc_cols), labels = names(wc_cols), title = "Tract class (A + B + C)", opacity = 0.8,
+            group = wc_ov_group) %>%
+  addLayersControl(overlayGroups = wc_ov_group, position = "topleft", options = layersControlOptions(collapsed = FALSE)) %>%
+  hideGroup(wc_ov_group) %>%
   addLegend("bottomright", colors = unname(pal_status), labels = names(pal_status), title = "Status", opacity = 0.9) %>%
   onRender("
     function(el, x, data) {
@@ -1897,159 +2137,9 @@ tagList(tags$p(tags$b(paste0("ADU projects in Los Angeles by issue year, ", wind
                paste0("Drag the slider or press Play to watch ADU projects accumulate by the year their first ADU permit was issued; switch to \"Issued in this year only\" to see one year at a time. ",
                       "One dot per project at its parcel (", fmt(nrow(p4)), " projects; ", fmt(n_nopt), " more could not be placed on the map and are not drawn). ",
                       "Color is the project's status as of ", fmt_date(data_asof), ", not its status in the year shown; the counts in the control are ADU units by that status. ",
-                      "Grey lines: CPAs (hover for the name); black outline: six candidate CPAs. ", basemap_credit, ".")))
-```
-
-## Working-class census tracts, citywide
-
-```{r c5-wc-city}
-pat_levels <- c("Fails income (C) only", "Fails income and one of education or occupation",
-                "Fails all three tests", "Fails education or occupation, passes income")
-pat_cols <- setNames(c("#9ECAE1", "#4292C6", "#08306B", "#74C476"), pat_levels)
-tc_city <- tract_class_city %>%
-  mutate(pattern = case_when(class != "Other" ~ NA_character_,
-                             !test_A & !test_B & !test_C ~ "Fails all three tests",
-                             !test_C & test_A & test_B ~ "Fails income (C) only",
-                             test_C ~ "Fails education or occupation, passes income",
-                             TRUE ~ "Fails income and one of education or occupation"))
-qa_add(7, "C5: every classifiable City tract has all three test results", "0 missing",
-       paste(sum(tc_city$class != "Insufficient data" & (is.na(tc_city$test_A) | is.na(tc_city$test_B) | is.na(tc_city$test_C))), "missing"),
-       !any(tc_city$class != "Insufficient data" & (is.na(tc_city$test_A) | is.na(tc_city$test_B) | is.na(tc_city$test_C))),
-       stop_if_fail = TRUE)
-qa_add(7, "C5: failure patterns cover every other tract exactly once", sum(tc_city$class == "Other"),
-       sum(!is.na(tc_city$pattern)), sum(!is.na(tc_city$pattern)) == sum(tc_city$class == "Other"), stop_if_fail = TRUE)
-c5_sf <- tracts_sf %>% select(CT20, LABEL) %>% inner_join(tc_city, by = "CT20") %>%
-  st_simplify(preserveTopology = TRUE, dTolerance = 30) %>% to_ll(digits = 5)
-qa_add(7, "C5 map has every City tract", nrow(city_xwalk), nrow(c5_sf), nrow(c5_sf) == nrow(city_xwalk), stop_if_fail = TRUE)
-fill_cls <- wc_pal(c5_sf$class)
-fill_why <- case_when(c5_sf$class == "Working-class" ~ "#F3D5BF",
-                      c5_sf$class == "Insufficient data" ~ "#D9D9D9",
-                      TRUE ~ unname(pat_cols[c5_sf$pattern]))
-cols_c5 <- list(cls = setNames(fill_cls, c5_sf$GEOID), why = setNames(fill_why, c5_sf$GEOID))
-bl_ll <- c5_sf %>% filter(class != "Insufficient data", borderline %in% TRUE)
-m_c5 <- leaflet_base(height = 640, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
-  addPolygons(data = c5_sf, layerId = ~GEOID, fillColor = fill_cls, fillOpacity = 0.7, color = "#FFFFFF", weight = 0.4,
-              label = lapply(wc_hover(c5_sf, cpa_name = c5_sf$cpa), HTML), group = "c5") %>%
-  addPolygons(data = bl_ll, fill = FALSE, color = "#222222", weight = 1.2, dashArray = "3,3",
-              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
-  addPolygons(data = to_ll(st_simplify(cpa_sf, preserveTopology = TRUE, dTolerance = 50), digits = 5),
-              fill = FALSE, color = "#555555", weight = 0.7,
-              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
-  addPolygons(data = to_ll(filter(cpa_sf, cpa %in% focus_cpas), digits = 5), fill = FALSE, color = "black", weight = 2.2,
-              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
-  addLegend("bottomright", colors = unname(wc_cols), labels = names(wc_cols), opacity = 0.8,
-            title = "Tract class", className = "info legend leg-cls") %>%
-  addLegend("bottomright", colors = c("#F3D5BF", unname(pat_cols), "#D9D9D9"),
-            labels = c("Working-class", pat_levels, "Insufficient data"), opacity = 0.8,
-            title = "Why a tract is not working-class", className = "info legend leg-why") %>%
-  onRender("
-    function(el, x, data) {
-      var map = this, nm = el.id;
-      var ctrl = L.control({position: 'topright'});
-      ctrl.onAdd = function() {
-        var div = L.DomUtil.create('div', 'leaflet-bar');
-        div.style.background = 'white'; div.style.padding = '6px 8px'; div.style.fontSize = '12px';
-        div.innerHTML = '<b>Show</b><br>' +
-          '<label><input type=\"radio\" name=\"' + nm + '_v\" value=\"cls\" checked> Working-class or other</label><br>' +
-          '<label><input type=\"radio\" name=\"' + nm + '_v\" value=\"why\"> Which tests other tracts fail</label>';
-        L.DomEvent.disableClickPropagation(div);
-        return div;
-      };
-      ctrl.addTo(map);
-      function update() {
-        var v = el.querySelector('input[name=\"' + nm + '_v\"]:checked').value;
-        var cols = data.cols[v];
-        Object.keys(cols).forEach(function(id) {
-          var l = map.layerManager.getLayer('shape', id);
-          if (l) l.setStyle({fillColor: cols[id]});
-        });
-        el.querySelectorAll('.leg-cls').forEach(function(d) { d.style.display = v === 'cls' ? '' : 'none'; });
-        el.querySelectorAll('.leg-why').forEach(function(d) { d.style.display = v === 'why' ? '' : 'none'; });
-      }
-      el.addEventListener('change', update);
-      update();
-    }", data = list(cols = cols_c5))
-tagList(tags$p(tags$b("Working-class census tracts in Los Angeles")),
-        m_c5,
-        tags$p(style = "font-size: 12px;",
-               paste0("Hover over a tract for its three test values, each marked pass or fail; use the control to show which tests the other tracts fail. ",
-                      "Tracts with at least 50% of their land in the City (", fmt(nrow(city_xwalk)), "), drawn in full and labeled with the CPA holding most of their land. ",
-                      "Same rule as the CPA sections: working-class when A, B and C all pass. Dashed outline: borderline (the 90% interval for A or B includes 50%). ",
-                      "Black outline: six candidate CPAs; grey lines: other CPAs. ACS 2020–2024 5-year. ", basemap_credit, ".")))
-```
-
-```{r c5-writeup-data}
-n_city <- nrow(tc_city); n_wc_c <- sum(tc_city$class == "Working-class")
-n_oth_c <- sum(tc_city$class == "Other"); n_ins_c <- sum(tc_city$class == "Insufficient data")
-n_fail <- c(A = sum(tc_city$class == "Other" & !tc_city$test_A), B = sum(tc_city$class == "Other" & !tc_city$test_B),
-            C = sum(tc_city$class == "Other" & !tc_city$test_C))
-pat_n <- function(d, p) sum(d$pattern %in% p)
-top_cpas <- function(p, k = 3) {
-  tc_city %>% filter(pattern %in% p) %>% count(cpa, sort = TRUE) %>% slice_head(n = k) %>%
-    summarise(txt = paste0(cpa, " (", n, ")", collapse = "; ")) %>% pull(txt)
-}
-six_oth <- tc_city %>% filter(cpa %in% focus_cpas, class == "Other")
-n_bl_oth <- sum(tc_city$class == "Other" & tc_city$borderline %in% TRUE)
-near_A <- abs(tc_city$share_no_ba - 0.5) <= tc_city$moe_ba; near_B <- abs(tc_city$share_occ - 0.5) <= tc_city$moe_occ
-could_wc <- tc_city$class == "Other" & tc_city$test_C & (tc_city$test_A | near_A) & (tc_city$test_B | near_B)   # pass C; miss A or B only within the MOE
-n_could <- sum(could_wc, na.rm = TRUE); n_could_six <- sum(could_wc & tc_city$cpa %in% focus_cpas, na.rm = TRUE)
-n_bl_failC <- sum(tc_city$class == "Other" & tc_city$borderline %in% TRUE & !tc_city$test_C)
-```
-
-Of the `r fmt(n_city)` census tracts in the City, `r fmt(n_wc_c)` (`r pct(n_wc_c / (n_city - n_ins_c))` of those with data) are working-class, `r fmt(n_oth_c)` are other, and `r n_ins_c` have too few residents or no published median family income to classify. Of the `r fmt(n_oth_c)` other tracts, `r fmt(n_fail[["C"]])` fail the income test (median family income at or above the metro median of $`r fmt(metro_mfi)`), `r fmt(n_fail[["A"]])` fail the education test and `r fmt(n_fail[["B"]])` fail the occupation test. The tests overlap heavily: `r fmt(pat_n(tc_city, "Fails all three tests"))` other tracts fail all three. Only `r fmt(n_could)` other tracts (`r n_could_six` of them in the six candidate CPAs) pass the income test and miss A or B by no more than the margin of error, so their class could change with a different sample. More other tracts, `r fmt(n_bl_oth)`, are borderline on A or B, but `r fmt(n_bl_failC)` of them also fail the income test, so the margin of error on A or B does not change their class. In the six candidate CPAs, `r nrow(six_oth)` tracts are other: `r pat_n(six_oth, "Fails all three tests")` fail all three tests, `r pat_n(six_oth, "Fails income (C) only")` fail only the income test, `r pat_n(six_oth, "Fails income and one of education or occupation")` fail income and one other test, and `r pat_n(six_oth, "Fails education or occupation, passes income")` pass income but fail education or occupation.
-
-```{r c5-writeup-table}
-tibble(Pattern = pat_levels) %>%
-  mutate(`What it means` = c("At least half of adults lack a bachelor's degree and at least half of workers hold the occupations in test B, but median family income is at or above the metro median",
-                             "Median family income is at or above the metro median, and either more than half of adults hold a bachelor's degree or more than half of workers hold other jobs, not both",
-                             "More than half of adults hold a bachelor's degree, more than half of workers hold other jobs, and median family income is at or above the metro median",
-                             "Median family income is below the metro median, but more than half of adults hold a bachelor's degree, more than half of workers hold other jobs, or both"),
-         `City tracts` = map_int(Pattern, ~ pat_n(tc_city, .x)),
-         `Six candidate CPAs` = map_int(Pattern, ~ pat_n(six_oth, .x)),
-         `CPAs with the most (tracts)` = map_chr(Pattern, top_cpas)) %>%
-  tbl(caption = "Why tracts are not working-class: which tests other tracts fail (census tracts)",
-      note = "\"Other jobs\" are management, business, science and arts occupations, the ACS group not counted in test B. Every other tract falls in exactly one row.")
-```
-
-```{r c5-venn, fig.width=11, fig.height=5.6}
-# Venn diagram: which of the three tests the tracts that are not working-class fail
-venn_counts <- function(d, where) {
-  d <- d %>% filter(class == "Other"); fa <- !d$test_A; fb <- !d$test_B; fc <- !d$test_C
-  tibble(panel = where,
-         region = c("A", "B", "C", "AB", "AC", "BC", "ABC"),
-         n = c(sum(fa & !fb & !fc), sum(!fa & fb & !fc), sum(!fa & !fb & fc), sum(fa & fb & !fc),
-               sum(fa & !fb & fc), sum(!fa & fb & fc), sum(fa & fb & fc)),
-         x = c(-1.05, 1.05, 0, 0, -0.68, 0.68, 0), y = c(0.62, 0.62, -1.18, 0.82, -0.36, -0.36, 0.05),
-         tot_A = sum(fa), tot_B = sum(fb), tot_C = sum(fc), n_other = nrow(d))
-}
-vn <- bind_rows(venn_counts(tc_city, "City of Los Angeles"), venn_counts(filter(tc_city, cpa %in% focus_cpas), "Six candidate CPAs")) %>%
-  mutate(panel = factor(panel, levels = c("City of Los Angeles", "Six candidate CPAs")))
-vn_tot <- vn %>% group_by(panel) %>% summarise(n_sum = sum(n), n_other = first(n_other), tot_A = first(tot_A), tot_B = first(tot_B), tot_C = first(tot_C), .groups = "drop")
-qa_add(7, "Venn diagram: the seven regions sum to the tracts that are not working-class (City / six CPAs)",
-       paste(vn_tot$n_other, collapse = " / "), paste(vn_tot$n_sum, collapse = " / "), all(vn_tot$n_sum == vn_tot$n_other), stop_if_fail = TRUE)
-qa_add(7, "Venn diagram: City and six-CPA totals match the write-up above", paste(n_oth_c, nrow(six_oth), sep = " / "),
-       paste(vn_tot$n_other, collapse = " / "), vn_tot$n_other[1] == n_oth_c && vn_tot$n_other[2] == nrow(six_oth), stop_if_fail = TRUE)
-circ <- function(cx, cy, set) { th <- seq(0, 2 * pi, length.out = 181); tibble(x = cx + cos(th), y = cy + sin(th), set = set) }
-circles <- bind_rows(circ(-0.5, 0.3, "A"), circ(0.5, 0.3, "B"), circ(0, -0.55, "C"))
-circles <- bind_rows(mutate(circles, panel = levels(vn$panel)[1]), mutate(circles, panel = levels(vn$panel)[2])) %>%
-  mutate(panel = factor(panel, levels = levels(vn$panel)))
-set_lab <- vn_tot %>% rowwise() %>% reframe(panel,
-  x = c(-1.25, 1.25, 0), y = c(1.52, 1.52, -1.78),
-  label = c(paste0("Fails A: education\n(", fmt(tot_A), " tracts)"), paste0("Fails B: occupation\n(", fmt(tot_B), " tracts)"),
-            paste0("Fails C: income\n(", fmt(tot_C), " tracts)")))
-ggplot() +
-  geom_polygon(data = circles, aes(x, y, group = set, fill = set), alpha = 0.28, color = "grey25", linewidth = 0.5) +
-  geom_text(data = vn, aes(x, y, label = fmt(n)), size = 5, fontface = "bold") +
-  geom_text(data = set_lab, aes(x, y, label = label), size = 3.6, lineheight = 0.95) +
-  geom_text(data = vn_tot, aes(x = 0, y = -2.25, label = paste0(fmt(n_other), " tracts are not working-class")), size = 3.6, fontface = "italic") +
-  scale_fill_manual(values = c(A = "#4C78A8", B = "#F58518", C = "#54A24B"), guide = "none") +
-  facet_wrap(~panel) + coord_equal(xlim = c(-2.2, 2.2), ylim = c(-2.4, 1.85)) +
-  labs(title = "Which tests do the tracts that are not working-class fail?",
-       caption = paste0("Each tract that is not working-class fails at least one test; a number in an overlap counts tracts that fail both (or all three) tests.\n",
-                        "A: under 50% of adults lack a bachelor's degree. B: under 50% of workers hold the occupations in test B. C: median family income at or above the metro median.\n",
-                        "Working-class tracts pass all three tests and sit outside the circles. Circle sizes are not to scale. ACS 2020–2024 5-year.")) +
-  theme_void() + theme(plot.title = element_text(face = "bold", size = 13), strip.text = element_text(face = "bold", size = 12),
-                       plot.caption = element_text(size = 8.5, hjust = 0, lineheight = 1.1))
+                      "Grey lines: CPAs (hover for the name); black outline: six candidate CPAs. ",
+                      "Tick \"Working-class tracts (A + B + C)\" at top left to shade every City tract by its class under the rule used in this analysis (working-class, other, or insufficient data) beneath the dots. ",
+                      basemap_credit, ".")))
 ```
 
 ```{r stage7-cpa-helpers}
