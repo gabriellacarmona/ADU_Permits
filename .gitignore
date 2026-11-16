@@ -16,3 +16,4 @@ adu_permit_pipeline.html
 figures/
 adu_*.gif
 .report_password
+.Renviron
