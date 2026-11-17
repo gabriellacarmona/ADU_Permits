@@ -1323,7 +1323,7 @@ None of these is adopted as is. Each of the tract-level rules rests on occupatio
 
 - **A. Education**: at least 50% of adults 25 and over have no bachelor's degree: 1 − (B15003_022 + _023 + _024 + _025) ÷ B15003_001.
 - **B. Occupation**: at least 50% of employed civilians 16 and over work in service; sales and office; natural resources, construction and maintenance; or production, transportation and material moving occupations: (DP03_0028 + DP03_0029 + DP03_0030 + DP03_0031) ÷ DP03_0026.
-- **C. Income**: tract median family income is below the Los Angeles–Long Beach–Anaheim metro median (B19113_001 tract ÷ metro, ratio under 1.00, "low-middle" or lower on the Reardon and Bischoff scale).
+- **C. Income**: tract median family income is below the Los Angeles–Long Beach–Anaheim metro median, `r paste0("$", fmt(metro_mfi))` in the 2020–2024 ACS (B19113_001 tract ÷ metro, ratio under 1.00, "low-middle" or lower on the Reardon and Bischoff scale).
 
 A tract with under 100 residents or no published median family income gets no class.
 
@@ -1404,7 +1404,7 @@ A definition built from three tests could give a different answer if any one tes
 - **Working-class: A + B + C (rule used)**: tracts that pass all three, the definition used in this analysis.
 - **Borderline**: tracts whose share for test A or B is within its margin of error of 50%.
 - **Alt. B: industry**: an alternative way to measure test B. It counts workers by the industry they work in (construction, manufacturing, trade, transportation, hospitality and other services) in place of the occupation they hold. **Working-class with industry B** is the number of tracts classed working-class if this measure replaces test B.
-- **Alt. C: household income below county**: an alternative way to measure test C. It compares the tract's median household income with the Los Angeles County median, in place of median family income with the metro median. **Working-class with household-income C** is the number of tracts classed working-class if this measure replaces test C.
+- **Alt. C: household income below county**: an alternative way to measure test C. It compares the tract's median household income with the Los Angeles County median, `r paste0("$", fmt(county_mhi))` in the 2020–2024 ACS (B19013_001), in place of median family income with the metro median. **Working-class with household-income C** is the number of tracts classed working-class if this measure replaces test C.
 
 If the three "working-class" columns were close, the choice of measure would matter little. Where they differ, the definition is sensitive to that choice in that CPA.
 
