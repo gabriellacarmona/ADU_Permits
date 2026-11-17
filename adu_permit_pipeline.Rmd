@@ -229,20 +229,44 @@ This report compares six candidate Community Plan Areas (CPAs) in three regions 
 ## Data sources
 
 ```{r data-sources}
+ds_link <- function(name, url) sprintf('<a href="%s">%s</a>', url, htmltools::htmlEscape(name))
 tibble(
-  Dataset = c("LADBS Building Permits Issued, 2010–2019", "LADBS Building Permits Issued, 2020–present",
-              "County parcel polygons (Assessor, exported August 2, 2025)", "City parcels (City of LA)",
-              "Assessor parcel roll, 2026", "Community Plan Areas (City Planning)",
-              "2020 census tracts (LA County eGIS)", "Hillside Grading Area",
-              "Very High Fire Hazard Severity Zones (City of LA GeoHub; data updated August 27, 2020)",
-              "American Community Survey 2020–2024 5-year"),
-  Path = c(params$path_permits_2010s, params$path_permits_2020s, params$path_parcel_zip,
+  Dataset = ds_link(
+    c("Building Permits Issued, 2010–2019", "Building Permits Issued, 2020–present",
+      "County parcel boundaries", "City parcels", "Assessor parcel roll", "Community Plan Areas",
+      "2020 census tracts", "Hillside Grading Area", "Very High Fire Hazard Severity Zones",
+      "American Community Survey, 5-year"),
+    c("https://data.lacity.org/City-Infrastructure-Service-Requests/Building-and-Safety-Building-Permits-Issued-Betwee/dyxf-7hc4/about_data",
+      "https://data.lacity.org/City-Infrastructure-Service-Requests/Building-and-Safety-Building-Permits-Issued-from-2/pi9x-tg5x/about_data",
+      "https://dpw.gis.lacounty.gov/dpw/rest/services/GIS_Web_Services/MapServer/2",
+      "https://data.lacity.org/d/qyra-qm2s",
+      "https://data.lacounty.gov/datasets/assessor-parcel-data-rolls-2021-2025",
+      "https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/Community_Plan_Areas/FeatureServer",
+      "https://public.gis.lacounty.gov/public/rest/services/LACounty_Dynamic/Demographics/MapServer/14",
+      "https://geohub.lacity.org",
+      "https://data.lacity.org/d/js76-xjtt",
+      "https://www.census.gov/programs-surveys/acs")),
+  Source = c("Los Angeles Department of Building and Safety (LADBS)", "Los Angeles Department of Building and Safety (LADBS)",
+             "Los Angeles County Assessor, served by LA County Public Works", "City of Los Angeles Bureau of Engineering",
+             "Los Angeles County Assessor", "Los Angeles City Planning",
+             "Los Angeles County Enterprise GIS, from U.S. Census Bureau boundaries",
+             "City of Los Angeles (LA City GeoHub)", "Los Angeles Fire Department (City of Los Angeles open data)",
+             "U.S. Census Bureau"),
+  `Years of data` = c("2010–2019",
+                      paste0("2020–", format(asof_early, "%Y"), " (latest status date ", fmt_date(asof_early), ")"),
+                      "Parcels as of August 2, 2025", "Current parcels", "2026 roll", "Current boundaries", "2020",
+                      "Current", "Current (data updated August 27, 2020)", "2020–2024"),
+  `Date accessed` = c(fmt_date(extract_date), fmt_date(extract_date), "November 14, 2026", "July 3, 2026",
+                      "November 14, 2026", "June 25, 2026", "November 12, 2026", "September 26, 2024",
+                      "March 9, 2026", "November 15, 2026"),
+  Path = htmltools::htmlEscape(c(params$path_permits_2010s, params$path_permits_2020s, params$path_parcel_zip,
            params$path_city_parcels, params$path_roll, params$path_cpa, params$path_tracts,
-           params$path_hillside, params$path_fire, "Census API through tidycensus"),
+           params$path_hillside, params$path_fire, "Census API through tidycensus")),
   Role = c("ADU identification", "ADU identification", "Parcel shapes, lot area, join target",
            "PIN-to-APN lookup for join step 2 only", "Land use class", "CPA boundary and area",
            "Tract geometry", "Hillside-fire screen", "Hillside-fire screen", "Community demographics")) %>%
-  tbl(caption = "Ten datasets: nine in the project folder and one from the Census API")
+  tbl(caption = "Ten datasets: nine in the project folder and one from the Census API", escape = FALSE,
+      note = "Dataset names link to the source page. Date accessed is the download date in the file name where there is one, and otherwise the date stamp on the file.")
 ```
 
 ## Geography: the tracts in each CPA
@@ -413,7 +437,7 @@ ACS data follow the tract lists. ACS reports whole tracts, so a CPA's demographi
 
 ## Parcels and land use definitions
 
-Parcel shapes come from the County parcel file (exported August 2, 2025) and attributes from the 2026 Assessor roll, joined on AIN. One polygon is one parcel. A parcel belongs to the CPA and tract that contain its interior point. Lot size is the polygon's area in square feet.
+Parcel shapes come from the County parcel file and attributes from the 2026 Assessor roll, joined on AIN. One polygon is one parcel. A parcel belongs to the CPA and tract that contain its interior point. Lot size is the polygon's area in square feet.
 
 **Land use class** comes from the roll's `Property Use Type`:
 
@@ -428,7 +452,7 @@ State ADU law treats a structure with two or more attached units as multi-family
 
 <div style="margin-left: 2em;">
 
-**Definition subject to change.** The City is rewriting this rule and does not enforce it as written. Since December 30, 2024, City Planning has not applied it to ADUs that state law requires cities to approve ([ZA Memo 143](https://planning.lacity.gov/odocument/184600d8-71d7-4d74-baf1-1f9cd2603320/ZA_Memo_No_143.pdf)), and HCD found the rule inconsistent with state ADU law ([November 19, 2024](https://www.hcd.ca.gov/sites/default/files/docs/policy-and-research/ordinance-review-letters/los-angeles-adu-findings-111924.pdf)). For ADUs approved under the City's own ordinance, the same memo identifies the sprinkler, parking and street-improvement conditions as conflicting with state law. A [draft ordinance dated September 3, 2026](https://planning.lacity.gov/odocument/8b7f0e87-9dff-431c-ba5b-fe85bce00fd6/ADU_Ordinance.pdf) keeps the restriction and the two-CPA exemption for ADUs approved under the City's ordinance; it has not been adopted. The Council's [September 2024 direction](https://cityclerk.lacity.org/onlinedocs/2016/16-1468-S2_CAF_9-11-24.pdf) to repeal the exemption is not reflected in that draft. How this report should treat these lots is one of the decisions to be made in setting the eligibility tiers.
+**Definition subject to change.** The City is rewriting this rule and does not enforce it as written. Since December 30, 2024, City Planning has not applied it to ADUs that state law requires cities to approve ([ZA Memo 143](https://planning.lacity.gov/odocument/184600d8-71d7-4d74-baf1-1f9cd2603320/ZA_Memo_No_143.pdf)), and HCD found the rule inconsistent with state ADU law ([November 19, 2024](https://www.hcd.ca.gov/sites/default/files/docs/policy-and-research/ordinance-review-letters/los-angeles-adu-findings-111924.pdf)). For ADUs approved under the City's own ordinance, the same memo identifies the sprinkler, parking and street-improvement conditions as conflicting with state law. State law requires cities to approve ADUs through a ministerial process and limits the standards a city may add: a city may not require sprinklers in an ADU when the main house needs none (Government Code § 66314(d)(12)), may not require parking in the cases listed in § 66322(a), and generally may not require street or other off-site improvements. A [draft ordinance dated September 3, 2026](https://planning.lacity.gov/odocument/8b7f0e87-9dff-431c-ba5b-fe85bce00fd6/ADU_Ordinance.pdf) would remove the exemption for the two CPAs, as the Council [directed in September 2024](https://cityclerk.lacity.org/onlinedocs/2016/16-1468-S2_CAF_9-11-24.pdf). It keeps the sprinkler, parking and street-width conditions and adds a fourth: the ADU must comply with any applicable State Minimum Fire Safe Regulations in Title 14 of the California Code of Regulations. It also replaces the fire-zone-and-hillside wording with a "Fire Restriction Area" defined elsewhere in the code (LAMC 12.22 A.38(b)), which this report has not mapped. The draft has not been adopted, so how it would affect lots in Northeast Los Angeles is unclear. How this report should treat these lots is one of the decisions to be made in setting the eligibility tiers.
 
 **Implementation.** This report applies the ordinance as adopted in 2019. `hillside_fire` is TRUE when the parcel's interior point lies in both the fire hazard layer and the hillside layer and the CPA is not exempt. The sprinkler, parking and street-width conditions cannot be tested with these files, so a flagged lot is not necessarily barred and tier B is an upper bound on what the restriction removes.
 
@@ -623,7 +647,7 @@ nela_both <- st_drop_geometry(prop_sf) %>%   # parcels the exemption keeps in ti
             elig = sum((land_use == "Single-family" | str_starts(land_use, "Multi-family")) & lot_sqft >= 4500))
 ```
 
-In Northeast Los Angeles, `r fmt(nela_both$parcels)` parcels lie in both the fire hazard and hillside layers, `r fmt(nela_both$elig)` of them eligible lots in tier A. The exemption keeps all of them in tier B; if the repeal the Council directed were adopted, those lots would face the same sprinkler, parking and street-width conditions as flagged lots elsewhere.
+In Northeast Los Angeles, `r fmt(nela_both$parcels)` parcels lie in both the fire hazard and hillside layers, `r fmt(nela_both$elig)` of them eligible lots in tier A. The exemption keeps all of them in tier B. If the September 2026 draft were adopted as written, the exemption would end and those lots would face the same conditions as flagged lots elsewhere.
 
 "Eligible" is an internal definition used in this report. The ordinance sets no minimum lot size, so the 4,500 sq ft floor, applied to single-family and multi-family lots alike, is a buildability screen: it marks lots with enough available buildable space to physically fit an ADU.
 
@@ -1291,7 +1315,7 @@ There is no single standard definition of a working-class neighborhood. Publishe
 - **Education.** The Center for American Progress defines the working class as people in the labor force without a four-year college degree ([Rowell 2017](https://www.americanprogressaction.org/article/everyone-know-americas-diverse-working-class/); [Center for American Progress, "Understanding the Working Class and the Challenges It Faces"](https://www.americanprogress.org/article/understanding-the-working-class-and-the-challenges-it-faces/)).
 - **Occupation.** Pew Research Center's 2026 study of who sees themselves as working class counts as blue-collar those who do manual or physical labor in manufacturing, mining and construction; agriculture, forestry, fishing and hunting; retail and trade; hospitality and service; or transportation ([Pew Research Center 2026](https://www.pewresearch.org/politics/2026/08/31/who-sees-themselves-as-working-class/)).
 - **Income.** Reardon and Bischoff sort neighborhoods by the ratio of tract median family income to the metro median, from poor (under 0.67) to affluent (1.50 and over), with "low-middle" at 0.80 to 1.00 ([Reardon and Bischoff 2011](https://s4.ad.brown.edu/Projects/Diversity/Data/Report/report111111.pdf)).
-- **Census tracts classed directly.** Two published approaches label tracts by the work their residents do. The Public Health Disparities Geocoding Project measures the share of employed residents in working-class occupations, meaning non-supervisory jobs, and treats areas at 66% or more as working-class ([Krieger et al. 2002](https://content.sph.harvard.edu/wwwhsph/sites/2068/2016/10/02_aje_krieger_et_al_geocode_mortality_cancer.pdf)). Florida and Adler label a tract by the occupational class (creative, service or working) that holds a plurality of its residents ([Florida and Adler 2018](https://www.tandfonline.com/doi/abs/10.1080/07352166.2017.1360743)). Other studies derive a working-class or blue-collar neighborhood type from cluster analysis (Morenoff and Tienda 1997; Delmelle 2016), which gives no cut-off to reuse.
+- **Census tracts classed directly.** Two published approaches label tracts by the work their residents do. The Public Health Disparities Geocoding Project measures the share of employed residents in working-class occupations, meaning non-supervisory jobs, and treats areas at 66% or more as working-class ([Krieger et al. 2002](https://pubmed.ncbi.nlm.nih.gov/12594195/)). Florida and Adler label a tract by the occupational class (creative, service or working) that holds a plurality of its residents ([Florida and Adler 2018](https://www.tandfonline.com/doi/abs/10.1080/07352166.2017.1360743)). Other studies derive a working-class or blue-collar neighborhood type from cluster analysis ([Morenoff and Tienda 1997](https://journals.sagepub.com/doi/10.1177/0002716297551001005); [Delmelle 2016](https://doi.org/10.1080/00045608.2015.1096188)), which gives no cut-off to reuse.
 
 None of these is adopted as is. Each of the tract-level rules rests on occupation alone, and Florida and Adler separate service workers from the working class, while this project counts them in it. In this analysis, a tract must instead look working-class on all three dimensions at once, each measured with an ACS tract table: education as the Center for American Progress defines it, occupation following Pew's list, and income on the Reardon and Bischoff scale. One difference from Pew: the ACS sales-and-office group also covers office and administrative support, so test B is somewhat broader than Pew's list.
 
