@@ -19,9 +19,12 @@ params:
   path_city_parcels: "Geographies/city_parcels 2/LA_City_Parcels.shp"
   path_cpa: "Geographies/cpas/Community_Plan_Areas.shp"
   path_tracts: "Geographies/census_tracts/2020_Census_Tracts.shp"
+  path_tracts10: "Geographies/census_tracts_2010/LA_County_Census_Tracts_2010.shp"
+  path_tract_rel: "Geographies/census_tracts_2010/tab20_tract20_tract10_st06.txt"
   path_hillside: "Geographies/hillside_overlay/Hillside_Grading_Area.shp"
   path_fire: "Geographies/Very_High_Fire_Hazard_Severity_Zones/Very_High_Fire_Hazard_Severity_Zones.shp"
   path_old_projects: "adu_projects.csv"
+  path_handcheck: "handchecks/wording_rule_handcheck.csv"
   path_tract_verification: "tract_verification_counts.csv"
   acs_year: 2024
   refresh: FALSE
@@ -81,9 +84,9 @@ dir.create(dir_cache,   recursive = TRUE, showWarnings = FALSE)
 # ---- Helpers -----------------------------------------------------------------
 fmt  <- function(x, d = 0) formatC(x, format = "f", digits = d, big.mark = ",")
 pct  <- function(x, d = 1) paste0(formatC(100 * x, format = "f", digits = d), "%")
-tbl  <- function(df, caption = NULL, note = NULL, ...) {
+tbl  <- function(df, caption = NULL, note = NULL, full_width = FALSE, ...) {
   k <- kable(df, format = "html", caption = caption, format.args = list(big.mark = ","), ...) %>%
-    kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE)
+    kable_styling(bootstrap_options = c("striped", "condensed"), full_width = full_width)
   if (!is.null(note)) k <- footnote(k, general = note, general_title = "Note: ",
                                     footnote_as_chunk = TRUE, threeparttable = TRUE)
   k
@@ -184,7 +187,7 @@ run4 <- params$refresh || run2 || run3 || !file.exists(f_joined)
 run5 <- params$refresh || !all(file.exists(c(f_acs, f_acs_extra)))
 
 # ---- Input check: stop if an input this knit needs is missing ----------------
-need <- c(params$path_cpa, params$path_tracts, params$path_hillside, params$path_fire)
+need <- c(params$path_cpa, params$path_tracts, params$path_hillside, params$path_fire, params$path_tracts10, params$path_tract_rel)
 if (run2) need <- c(need, params$path_roll,
                     if (!file.exists(params$path_parcel_shp) &&
                         !(file.exists(f_geo_cache) && !params$refresh)) params$path_parcel_zip)
@@ -220,8 +223,8 @@ This report compares six candidate Community Plan Areas (CPAs) in three regions 
 - **ADU project**: one permitted job. An ADU job often has several permit records: the original building permit and any supplemental permits filed later to revise it. Together these are the project's **permit chain**, and each chain is counted once.
 - **ADU unit**: one ADU or junior ADU that the project adds. Most projects add one unit; status tables, charts and maps count units.
 - **Statuses** (exclusive of each other): **Completed** (a certificate of occupancy, a final inspection or a certificate of completion anywhere in the permit chain); **Stalled** (not completed, and no change in permit status for three years or more, counted back from the latest status date in the data: the last status change was on or before `r fmt_date(asof_early %m-% years(3))`); **In progress** (everything else still active: not completed, with a status change after `r fmt_date(asof_early %m-% years(3))`).
-- **Parcel-level ADU Eligibility Tiers** (Internal definitions): **tier A** counts single-family and multi-family lots of 4,500 sq ft or more; **tier B** also removes lots that lie in both a Very High Fire Hazard Severity Zone and a Hillside Area. Lots in the 1) Northeast Los Angeles and 2) Silver Lake - Echo Park - Elysian Valley CPAs are exempt from this restriction ([LAMC 12.22 A.33(c)(4)](https://cityclerk.lacity.org/onlinedocs/2016/16-1468_ord_draft_12-05-2019.pdf), Ordinance No. 186,481, effective December 19, 2019; [Council File 16-1468-S2](https://cityclerk.lacity.org/onlinedocs/2016/16-1468-S2_misc_4-26-24.pdf)), so tier B removes no lots there. Notably, lots excluded through tier B may still have ADUs, given that the City's ADU ordinance allows an ADU if it has an automatic fire sprinkler system, one off-street parking space and frontage on a street with at least 20 feet of improved roadway.
-- **Data dates**: ADU permits issued from January 1, 2017 through `r fmt_date(asof_early)`, the latest status date in the LADBS extracts (downloaded `r fmt_date(extract_date)`); the 2026 Assessor roll; the 2020–2024 American Community Survey.
+- **ADU tags**: ADUs are identified in three ways and every ADU carries the tag of the one that found it. **LADBS permitted ADUs, 2017 to present**: the City's permit record, by ADU tag, ADU use type or work description. **Older permitted ADUs, 2010 to 2016**: second units permitted before the 2017 state reforms, found by the wording of the permit. **Grandfathered ADUs**: single-family parcels where the Assessor's 2026 roll records an ADU and no permit was found. All three are counted together in every table, chart and map; the table of ADUs by tag under [ADU identification](#adu-identification) shows how many each contributes in each CPA.
+- **Parcel-level ADU Eligibility Tiers** (Internal definitions), each counting single-family and multi-family lots: **tier A**, lots of 4,000 sq ft or more; **tier B**, lots of 4,500 sq ft or more (tier A in earlier versions of this report); **tier C**, tier B less lots that lie in both a Very High Fire Hazard Severity Zone and a Hillside Area (tier B in earlier versions); **tier D**, tier A less those lots everywhere. Under tier C, lots in the 1) Northeast Los Angeles and 2) Silver Lake - Echo Park - Elysian Valley CPAs are exempt from the restriction ([LAMC 12.22 A.33(c)(4)](https://cityclerk.lacity.org/onlinedocs/2016/16-1468_ord_draft_12-05-2019.pdf), Ordinance No. 186,481, effective December 19, 2019; [Council File 16-1468-S2](https://cityclerk.lacity.org/onlinedocs/2016/16-1468-S2_misc_4-26-24.pdf)), so tier C removes no lots there; tier D applies no exemption. Notably, lots excluded through tiers C and D may still have ADUs, given that the City's ADU ordinance allows an ADU if it has an automatic fire sprinkler system, one off-street parking space and frontage on a street with at least 20 feet of improved roadway. **The CPA sections use tier B for their headline figures**; the 4,000 sq ft floor is shown beside it and has no cited source yet.
 </div>
 
 # Data and methods
@@ -229,44 +232,44 @@ This report compares six candidate Community Plan Areas (CPAs) in three regions 
 ## Data sources
 
 ```{r data-sources}
-ds_link <- function(name, url) sprintf('<a href="%s">%s</a>', url, htmltools::htmlEscape(name))
-tibble(
-  Dataset = ds_link(
-    c("Building Permits Issued, 2010–2019", "Building Permits Issued, 2020–present",
-      "County parcel boundaries", "City parcels", "Assessor parcel roll", "Community Plan Areas",
-      "2020 census tracts", "Hillside Grading Area", "Very High Fire Hazard Severity Zones",
-      "American Community Survey, 5-year"),
-    c("https://data.lacity.org/City-Infrastructure-Service-Requests/Building-and-Safety-Building-Permits-Issued-Betwee/dyxf-7hc4/about_data",
-      "https://data.lacity.org/City-Infrastructure-Service-Requests/Building-and-Safety-Building-Permits-Issued-from-2/pi9x-tg5x/about_data",
-      "https://dpw.gis.lacounty.gov/dpw/rest/services/GIS_Web_Services/MapServer/2",
-      "https://data.lacity.org/d/qyra-qm2s",
-      "https://data.lacounty.gov/datasets/assessor-parcel-data-rolls-2021-2025",
-      "https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/Community_Plan_Areas/FeatureServer",
-      "https://public.gis.lacounty.gov/public/rest/services/LACounty_Dynamic/Demographics/MapServer/14",
-      "https://geohub.lacity.org",
-      "https://data.lacity.org/d/js76-xjtt",
-      "https://www.census.gov/programs-surveys/acs")),
-  Source = c("Los Angeles Department of Building and Safety (LADBS)", "Los Angeles Department of Building and Safety (LADBS)",
-             "Los Angeles County Assessor, served by LA County Public Works", "City of Los Angeles Bureau of Engineering",
-             "Los Angeles County Assessor", "Los Angeles City Planning",
-             "Los Angeles County Enterprise GIS, from U.S. Census Bureau boundaries",
-             "City of Los Angeles (LA City GeoHub)", "Los Angeles Fire Department (City of Los Angeles open data)",
-             "U.S. Census Bureau"),
-  `Years of data` = c("2010–2019",
-                      paste0("2020–", format(asof_early, "%Y"), " (latest status date ", fmt_date(asof_early), ")"),
-                      "Parcels as of August 2, 2025", "Current parcels", "2026 roll", "Current boundaries", "2020",
-                      "Current", "Current (data updated August 27, 2020)", "2020–2024"),
-  `Date accessed` = c(fmt_date(extract_date), fmt_date(extract_date), "November 14, 2026", "July 3, 2026",
-                      "November 14, 2026", "June 25, 2026", "November 12, 2026", "September 26, 2024",
-                      "March 9, 2026", "November 15, 2026"),
-  Path = htmltools::htmlEscape(c(params$path_permits_2010s, params$path_permits_2020s, params$path_parcel_zip,
-           params$path_city_parcels, params$path_roll, params$path_cpa, params$path_tracts,
-           params$path_hillside, params$path_fire, "Census API through tidycensus")),
-  Role = c("ADU identification", "ADU identification", "Parcel shapes, lot area, join target",
-           "PIN-to-APN lookup for join step 2 only", "Land use class", "CPA boundary and area",
-           "Tract geometry", "Hillside-fire screen", "Hillside-fire screen", "Community demographics")) %>%
-  tbl(caption = "Ten datasets: nine in the project folder and one from the Census API", escape = FALSE,
-      note = "Dataset names link to the source page. Date accessed is the download date in the file name where there is one, and otherwise the date stamp on the file.")
+ds <- tribble(~name, ~url, ~source, ~years, ~accessed, ~path, ~role,
+  "Building Permits Issued, 2010–2019", "https://data.lacity.org/City-Infrastructure-Service-Requests/Building-and-Safety-Building-Permits-Issued-Betwee/dyxf-7hc4/about_data",
+    "Los Angeles Department of Building and Safety (LADBS)", "2010–2019", fmt_date(extract_date), params$path_permits_2010s,
+    "ADU identification, main source: LADBS permitted ADUs (2017 to 2019) and older permitted ADUs (2010 to 2016)",
+  "Building Permits Issued, 2020–present", "https://data.lacity.org/City-Infrastructure-Service-Requests/Building-and-Safety-Building-Permits-Issued-from-2/pi9x-tg5x/about_data",
+    "Los Angeles Department of Building and Safety (LADBS)", paste0("2020–", format(asof_early, "%Y"), " (latest status date ", fmt_date(asof_early), ")"),
+    fmt_date(extract_date), params$path_permits_2020s, "ADU identification, main source: LADBS permitted ADUs (2020 to present)",
+  "Assessor Parcel Data, 2026 roll", "https://data.lacounty.gov/datasets/0d3ac33a76e1495bb7fc522a8085729c/explore",
+    "Los Angeles County Assessor", "2026 roll (parcels as of January 1, 2026)", "November 14, 2026", params$path_roll,
+    "Land use class of every parcel; ADU identification, second source: grandfathered ADUs, from the property use code",
+  "Assessor Parcel Data, 2021–2025 rolls", "https://data.lacounty.gov/datasets/70d93266f45a4080a97b285a471493cd/explore",
+    "Los Angeles County Assessor", "2021–2025 rolls", "November 18, 2026", "Geographies/Parcel_Data_2021_Table_6988027470498947954.csv",
+    "Sales and ownership history; in the project folder for the sales analysis, not used in this report's figures yet",
+  "Assessor Parcel Data, 2016–2020 rolls", "https://data.lacounty.gov/datasets/ae59573186a94265968ed80a59455074/explore",
+    "Los Angeles County Assessor", "2016–2020 rolls", "November 18, 2026", "Geographies/Parcel_Data_2016_2020_Table.csv",
+    "Sales and ownership history; in the project folder for the sales analysis, not used in this report's figures yet",
+  "County parcel boundaries", "https://dpw.gis.lacounty.gov/dpw/rest/services/GIS_Web_Services/MapServer/2",
+    "Los Angeles County Assessor, served by LA County Public Works", "Parcels as of August 2, 2025", "November 14, 2026", params$path_parcel_zip,
+    "Parcel shapes, lot area, join target",
+  "City parcels", "https://data.lacity.org/d/qyra-qm2s", "City of Los Angeles Bureau of Engineering", "Current parcels", "July 3, 2026",
+    params$path_city_parcels, "PIN-to-APN lookup for join step 2 only",
+  "Community Plan Areas", "https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/Community_Plan_Areas/FeatureServer",
+    "Los Angeles City Planning", "Current boundaries", "June 25, 2026", params$path_cpa, "CPA boundary and area",
+  "2020 census tracts", "https://public.gis.lacounty.gov/public/rest/services/LACounty_Dynamic/Demographics/MapServer/14",
+    "Los Angeles County Enterprise GIS, from U.S. Census Bureau boundaries", "2020", "November 12, 2026", params$path_tracts, "Tract geometry",
+  "2010 census tracts (TIGER/Line 2019)", "https://www2.census.gov/geo/tiger/TIGER2019/TRACT/", "U.S. Census Bureau", "2010 boundaries", "November 18, 2026",
+    params$path_tracts10, "Assigning 2015–2019 ACS tracts to CPAs for the homeownership change tables",
+  "2020-to-2010 census tract relationship file", "https://www2.census.gov/geo/docs/maps-data/data/rel2020/tract/", "U.S. Census Bureau", "2010 and 2020 tracts",
+    "November 18, 2026", params$path_tract_rel, "Linking 2010 and 2020 tracts for the tract-level change layers",
+  "Hillside Grading Area", "https://geohub.lacity.org", "City of Los Angeles (LA City GeoHub)", "Current", "September 26, 2024", params$path_hillside, "Hillside-fire screen",
+  "Very High Fire Hazard Severity Zones", "https://data.lacity.org/d/js76-xjtt", "Los Angeles Fire Department (City of Los Angeles open data)",
+    "Current (data updated August 27, 2020)", "March 9, 2026", params$path_fire, "Hillside-fire screen",
+  "American Community Survey, 5-year", "https://www.census.gov/programs-surveys/acs", "U.S. Census Bureau", "Two periods: 2020–2024 and 2015–2019",
+    "November 15 and 18, 2026", "Census API through tidycensus", "Community demographics (2020–2024); homeownership change (2015–2019 compared with 2020–2024)")
+ds %>% transmute(Dataset = sprintf('<a href="%s">%s</a>', url, htmltools::htmlEscape(name)), Source = source, `Years of data` = years,
+                 `Date accessed` = accessed, Path = htmltools::htmlEscape(path), Role = role) %>%
+  tbl(caption = paste0(nrow(ds), " datasets: ", nrow(ds) - 1, " in the project folder and one from the Census API"), escape = FALSE,
+      note = "Dataset names link to the source page. Date accessed is the download date in the file name where there is one, and otherwise the date stamp on the file. The LADBS permit record is the main source for identifying ADUs; the 2026 Assessor roll is the second, used for ADUs that no permit records.")
 ```
 
 ## Geography: the tracts in each CPA
@@ -454,7 +457,7 @@ State ADU law treats a structure with two or more attached units as multi-family
 
 **Definition subject to change.** The City is rewriting this rule and does not enforce it as written. Since December 30, 2024, City Planning has not applied it to ADUs that state law requires cities to approve ([ZA Memo 143](https://planning.lacity.gov/odocument/184600d8-71d7-4d74-baf1-1f9cd2603320/ZA_Memo_No_143.pdf)), and HCD found the rule inconsistent with state ADU law ([November 19, 2024](https://www.hcd.ca.gov/sites/default/files/docs/policy-and-research/ordinance-review-letters/los-angeles-adu-findings-111924.pdf)). For ADUs approved under the City's own ordinance, the same memo identifies the sprinkler, parking and street-improvement conditions as conflicting with state law. State law requires cities to approve ADUs through a ministerial process and limits the standards a city may add: a city may not require sprinklers in an ADU when the main house needs none (Government Code § 66314(d)(12)), may not require parking in the cases listed in § 66322(a), and generally may not require street or other off-site improvements. A [draft ordinance dated September 3, 2026](https://planning.lacity.gov/odocument/8b7f0e87-9dff-431c-ba5b-fe85bce00fd6/ADU_Ordinance.pdf) would remove the exemption for the two CPAs, as the Council [directed in September 2024](https://cityclerk.lacity.org/onlinedocs/2016/16-1468-S2_CAF_9-11-24.pdf). It keeps the sprinkler, parking and street-width conditions and adds a fourth: the ADU must comply with any applicable State Minimum Fire Safe Regulations in Title 14 of the California Code of Regulations. It also replaces the fire-zone-and-hillside wording with a "Fire Restriction Area" defined elsewhere in the code (LAMC 12.22 A.38(b)), which this report has not mapped. The draft has not been adopted, so how it would affect lots in Northeast Los Angeles is unclear. How this report should treat these lots is one of the decisions to be made in setting the eligibility tiers.
 
-**Implementation.** This report applies the ordinance as adopted in 2019. `hillside_fire` is TRUE when the parcel's interior point lies in both the fire hazard layer and the hillside layer and the CPA is not exempt. The sprinkler, parking and street-width conditions cannot be tested with these files, so a flagged lot is not necessarily barred and tier B is an upper bound on what the restriction removes.
+**Implementation.** This report applies the ordinance as adopted in 2019. `hillside_fire` is TRUE when the parcel's interior point lies in both the fire hazard layer and the hillside layer and the CPA is not exempt. The sprinkler, parking and street-width conditions cannot be tested with these files, so a flagged lot is not necessarily barred and tier C is an upper bound on what the restriction removes. Tier D applies the same test with no exemption: `hf_all` is TRUE for every parcel in both layers, in every CPA.
 
 </div>
 
@@ -641,21 +644,35 @@ hf_tab %>% arrange(match(cpa, focus_cpas)) %>% rename(CPA = cpa) %>%
   tbl(caption = "Parcels in the fire hazard and hillside layers, six candidate CPAs (parcels, by interior point)",
       note = paste("Fire: Very High Fire Hazard Severity Zones, City of Los Angeles GeoHub (published November 14, 2015; data updated August 27, 2020). This map predates CAL FIRE's March 24, 2025 recommended zones.",
                    "Hillside: Hillside_Grading_Area.shp. Northeast Los Angeles is exempt by location (LAMC 12.22 A.33(c)(4)(i)), so none of its parcels is flagged."))
-nela_both <- st_drop_geometry(prop_sf) %>%   # parcels the exemption keeps in tier B
+nela_both <- st_drop_geometry(prop_sf) %>%   # parcels the exemption keeps in tier C
   filter(cpa == "Northeast Los Angeles", in_fire, in_hill) %>%
   summarise(parcels = n(),
             elig = sum((land_use == "Single-family" | str_starts(land_use, "Multi-family")) & lot_sqft >= 4500))
 ```
 
-In Northeast Los Angeles, `r fmt(nela_both$parcels)` parcels lie in both the fire hazard and hillside layers, `r fmt(nela_both$elig)` of them eligible lots in tier A. The exemption keeps all of them in tier B. If the September 2026 draft were adopted as written, the exemption would end and those lots would face the same conditions as flagged lots elsewhere.
+In Northeast Los Angeles, `r fmt(nela_both$parcels)` parcels lie in both the fire hazard and hillside layers, `r fmt(nela_both$elig)` of them eligible lots in tier B (4,500 sq ft or more). The exemption keeps all of them in tier C. If the September 2026 draft were adopted as written, the exemption would end and those lots would face the same conditions as flagged lots elsewhere; tier D shows the lot counts with no exemption.
 
-"Eligible" is an internal definition used in this report. The ordinance sets no minimum lot size, so the 4,500 sq ft floor, applied to single-family and multi-family lots alike, is a buildability screen: it marks lots with enough available buildable space to physically fit an ADU.
+"Eligible" is an internal definition used in this report. The ordinance sets no minimum lot size, so the lot floor, applied to single-family and multi-family lots alike, is a buildability screen: it marks lots with enough available buildable space to physically fit an ADU. The report has used 4,500 sq ft (tiers B and C); tiers A and D apply a 4,000 sq ft floor, added at the team's request, which has no cited source yet.
 
 ## ADU identification
 
-ADU permits come from the Los Angeles Department of Building and Safety (LADBS), which publishes every building permit it issues on the City's open data portal. The City keeps that record in two datasets, one for permits issued from 2010 through 2019 and one for permits issued from 2020 to the present, so the two are merged into one file here. Together they run from January 2010 through `r fmt_date(asof_early)`. This report counts ADUs permitted from January 1, 2017, the date California's statewide ADU reforms (SB 1069 and AB 2299) took effect, through `r fmt_date(asof_early)`.
+ADUs are identified in three ways, and every ADU carries a tag that says which one found it. The three groups are counted together throughout this report, and the table of ADUs by tag below shows how many each one contributes in every candidate CPA.
 
-LADBS tags each permit with the number of ADUs and junior ADUs (JADUs) it adds or removes, in the `ADU_CHANGED` and `JUNIOR_ADU` fields. A permit is ADU-related when the two tags together are not zero (step 1). Given that a small group of ADU developments were permitted before the City's ADU tags were in consistent use, or were never tagged, we also add ADUs and JADUs based on permit descriptions (step 1b): original building permits from 2017 on whose use type is ADU or JADU and whose work description describes new construction, a conversion or an addition.
+### LADBS permitted ADUs, 2017 to present (`r fmt_date(asof_early)`)
+
+This is the main source. The Los Angeles Department of Building and Safety (LADBS) publishes every building permit it issues on the City's open data portal. The City keeps that record in two datasets, one for permits issued from 2010 through 2019 and one for permits issued from 2020 to the present, so the two are merged into one file here. Together they run from January 2010 through `r fmt_date(asof_early)`. This group holds ADUs first permitted from January 1, 2017, the date California's statewide ADU reforms (SB 1069 and AB 2299) took effect, through `r fmt_date(asof_early)`.
+
+LADBS tags each permit with the number of ADUs and junior ADUs (JADUs) it adds or removes, in the `ADU_CHANGED` and `JUNIOR_ADU` fields. A permit is ADU-related when the two tags together are not zero (step 1). A small group of ADUs were permitted before the tags were in consistent use, or were never tagged, so two more steps read the permit itself. Step 1b adds original building permits from 2017 on whose use type is ADU or JADU and whose work description describes new construction, a conversion or an addition. Step 1c adds building permits that carry neither the tag nor the use type but whose work description creates a unit: a conversion to an ADU, a new ADU, an ADU addition, or a supplemental permit that changes the work description or use to an ADU. The description must name an ADU or cite an ADU law (AB 2299, SB 1069, Ordinance 184,510, LAMC 12.22 A.33 or the state code sections). Work on an existing unit, SB 9 two-unit projects, ADU-to-JADU conversions, removals and plan revisions are left out, and so is any permit that only revises a project already counted.
+
+### Older permitted ADUs, 2010 to 2016
+
+Before the 2017 reforms the City had no ADU tag. Second units were approved through other City permitting channels, chiefly the second dwelling unit rules of AB 1866 as applied under Zoning Administrator Memorandum 120. Step 1c finds them by the wording of that period on building permits issued from 2010 through 2016: "second dwelling unit", "2nd unit", ZA Memorandum 120 or AB 1866, with the same exclusions as above. The LADBS open data begin in January 2010, so second units permitted before then are not in this group.
+
+### Grandfathered ADUs (Assessor record)
+
+Some ADUs appear in no permit the steps above can find, because they were built before 2010, permitted under wording the rules do not catch, or built without a permit. The Los Angeles County Assessor records them when it assesses the property. The Assessor's four-character property use code marks ADUs on single-family parcels: in a code such as `01D6`, the characters read 0 = residential, 1 = single-family residence, D = detached and 6 = "ADU - Accessory Dwelling Unit (less than 1,200 sq ft, kitchen and bath)"; the [Assessor Portal](https://portal.assessor.lacounty.gov/) decodes each character on a parcel's detail page. Step 9 adds every single-family parcel whose use code in the 2026 roll (the roll as of January 1, 2026) ends in 6 and that holds no ADU from the two permitted groups. Each counts as one completed ADU unit. The roll gives no construction or permit date, so these ADUs have no year, and the code does not say whether the unit was permitted: "grandfathered" is this report's label for an ADU that exists on the roll outside the permit record.
+
+### How permitted ADUs are counted
 
 One ADU job often produces several permit records: the original building permit, plus supplemental permits filed later to revise or correct it (a change in plans or contractor, for example). LADBS numbers each supplement off its original permit, so the original and its supplements are grouped into one **permit chain**, and each chain is counted as one **project** (step 2). Without this step an ADU would be counted once for every permit filed for it. A few jobs were entered under two chains, and those are merged (step 2b). Each project then gets exactly one outcome, tested in this order: not active (dropped), completed, stalled, in progress.
 
@@ -731,6 +748,64 @@ if (run3) {
                      rule = sprintf("Add %s chains the flag misses: original 2017+ Bldg permits with an ADU or JADU use type and construction wording, no flag in the chain (one unit each)", fmt(length(sec_roots))),
                      remaining = length(all_roots))
 
+  # Step 1c: ADUs that only the work description identifies (addendum 1.1).
+  # A Bldg permit (not a demolition) in a chain with no flag and no use-type hit
+  # counts when its description creates a unit. From 2017 on it must name an ADU
+  # or cite an ADU law; for 2010-2016 the second-unit wording of that period
+  # counts too. Work on an existing unit, SB 9 two-unit projects, ADU-to-JADU
+  # swaps, removals and plan revisions are left out.
+  w_adu  <- "(\\bJ?ADUS?\\b|\\bA\\.D\\.U\\.?|ACCESS\\w* DWELLING)"
+  w_gen  <- "(SECOND DWELLING|2ND DWELLING|SECOND DWLG|2ND DWLG|SECOND UNIT|2ND UNIT)"
+  w_unit <- paste0("(", w_adu, "|", w_gen, ")")
+  w_law  <- "184,?510|\\bAB[ -]?2299|\\bSB[ -]?1069|\\bAB[ -]?494|\\bSB[ -]?229\\b|65852\\.2\\b|65852\\.2\\(|12\\.22 ?-?A\\.?33|\\b66323|\\b[AS]\\.?B\\.?[ -]?1866|ASSEMBLY BILL (NO\\.? ?)?1866|\\b(ZA|Z\\.A\\.?|ZI|MEMO\\w*|ZONING ADMINISTRATOR\\w*)[^A-Z0-9]{0,6}(MEMO\\w*[^A-Z0-9]{0,4})?(N[O0][^A-Z0-9]{0,3}|NUMBER )?120\\b"
+  w_adj  <- "(?:(?:\\(N\\)|NEW|AN|A|THE|ONE|DETACHED|ATTACHED|DET\\.?|ATT\\.?|LEGAL|HABITABLE|[12]-STORY|(?:ONE|TWO|SINGLE)[- ]STORY|FULLY SPRINKLERED|IRR\\w*\\.?|REGUL\\w+|[0-9][^A-Z]{0,24}(?:SF|SQ\\.? ?FT\\.?|S\\.F\\.?|SQFT)?) ){0,6}"
+  w_pre  <- "^[^A-Z0-9(\\[]*(\\[?E-?PLAN\\]?[^A-Z0-9(]*)?"
+  p_conv <- paste0("(CONVER\\w+|CHANGE (OF )?USE|LEGALI[ZS]\\w*).{0,170}?\\b(TO|INTO|AS)\\s+", w_adj, w_unit)
+  p_new  <- paste0(w_pre, "((CONSTRUCT\\w*|BUILD|ERECT|PROPOSED?)\\s+)?[^A-Z]{0,30}(NEW|\\(N\\))((?!\\(E\\)|EXISTING|\\bTO\\b|\\bWITH\\b|\\bW/|\\bFOR\\b|\\bAT\\b|\\bIN\\b|\\bON\\b|;).){0,80}?\\b", w_unit)
+  p_lead <- paste0(w_pre, "(PROPOSED?\\s+)?", w_adj, w_unit)
+  p_add  <- paste0("\\b(ADD|ADDITION OF|ADDING|CONSTRUCT|BUILD|CREATE)\\s+[^A-Z(]{0,25}(A |AN |NEW |\\(N\\) ?|DETACHED |ATTACHED |[12]-STORY )*", w_unit, "|", w_unit, "\\s+(UNIT\\s+)?ADDITION\\b")
+  p_desc <- paste0("(WORK DESCRIPTION|DESCRIPTION OF WORK|SCOPE( OF WORK)?|CHANGE (OF )?USE|\\bUSE)\\b.{0,90}?\\b(TO|TO READ|TO:)\\W{0,4}.{0,170}?", w_unit)
+  n_sb9   <- "\\bSB[ -]?9\\b|SENATE BILL (NO\\.? ?)?9\\b|TWO[- ]UNIT DEVELOP|65852\\.21"
+  n_soft  <- "SOFT[- ]?STORY|RETROFIT|VERIF\\w+ (OF )?(PROPOSED )?WORK|WILDFIRE REBUILD|SEPARATE PERMIT|IN CONJUNCTION|RE-?ROOF|RE-?STUCCO|SOLAR|TRANSFER OF PERMIT|COVENANT|AFFIDAVIT"
+  n_exist <- paste0("(\\(E\\)|EXISTING|EXIST\\.?|\\bEX\\.?\\s|PERMITTED|PROPOSED|APPROVED)\\s*([\\w\\.'\"\\-/]+\\s+){0,4}", w_unit)
+  n_swap  <- paste0("(ADU|ACCESS\\w* DWELLING UNIT)\\s+CONVERSION\\s+TO\\s+(A |AN )?(JADU|JR|JUNIO)|ADDITION TO\\s+(THE |A |AN )?", w_unit, "|", w_adu,
+                    "\\s*(\\([^)]*\\)\\s*)?(UNIT\\s*)?(IN)?TO\\s+(A |AN |THE |\\(N\\) ?|NEW )*(JADU|JR|JUNIO)|(JADU|JR\\.? ?A|JUNIO)\\w*[^.]{0,40}\\b(IN)?TO\\s+(A |AN |THE |\\(N\\) ?|NEW )*(ADU|ACCESS)")
+  n_rem   <- paste0("(REMOVE|DELETE|DEMOLISH|DEMO|ENLARGE|EXPAND|EXTEND|REMODEL)\\b[^.]{0,40}", w_unit, "|", w_unit,
+                    "[^.]{0,30}\\b(BACK )?(TO|INTO)\\s+(A |AN |THE |\\(N\\) ?|NEW )*(GARAGE|STORAGE|REC|ACCESSORY LIVING|SFD|SINGLE FAMILY|MAIN DWELLING|DWELLING\\b)")
+  n_from  <- paste0("\\bFROM\\s+[^.]{0,40}", w_unit, "[^.]{0,40}\\bTO\\b")
+  n_rev   <- "\\b(REVIS\\w+|CORRECT\\w*|UPDATE\\w*|RELOCATE\\w*|MOVE)\\b"
+  wpool <- raw %>%
+    filter(!root %in% all_roots, str_starts(coalesce(PERMIT_TYPE, ""), "Bldg"), PERMIT_TYPE != "Bldg-Demolition", !is.na(issue_dt)) %>%
+    mutate(wd = str_sub(str_squish(toupper(coalesce(WORK_DESC, ""))), 1, 600)) %>%
+    filter(str_detect(wd, w_unit)) %>%
+    mutate(w_isadu = str_detect(wd, w_adu), w_haslaw = str_detect(wd, w_law), w_desc = str_detect(wd, p_desc),
+           w_create = str_detect(wd, p_conv) | str_detect(wd, p_new) | str_detect(wd, p_lead) | str_detect(wd, p_add) | w_desc,
+           w_neg = str_detect(wd, n_sb9) | str_detect(wd, n_soft) | str_detect(wd, n_exist) | str_detect(wd, n_swap) |
+             str_detect(wd, n_rem) | str_detect(wd, n_from) | (str_detect(wd, n_rev) & !w_desc),
+           hit = !w_neg & if_else(issue_dt >= as.Date("2017-01-01"), w_create & (w_isadu | w_haslaw), w_create | w_haslaw))
+  wref <- str_match(wpool$wd, "\\b(\\d{5})\\s*-\\s*(\\d{5})\\s*-\\s*(\\d{5})\\b")   # a permit number named in the text
+  wpool <- wpool %>%
+    mutate(ref_root = if_else(is.na(wref[, 1]), NA_character_,
+                              paste0(wref[, 2], "-", sprintf("%05d", (suppressWarnings(as.integer(wref[, 3])) %/% 10000) * 10000), "-", wref[, 4])),
+           w_sup = str_detect(wd, "SUPPL"))
+  own_roots <- unique(wpool$root[wpool$hit & !wpool$w_sup])
+  whit <- wpool %>%
+    filter(hit, !(ref_root %in% all_roots),                                      # the permit it revises is already counted
+           !(!is.na(ref_root) & ref_root != root & ref_root %in% own_roots)) %>%  # or is itself a wording hit
+    arrange(root, issue_dt, PERMIT_NBR) %>% group_by(root) %>% slice(1) %>% ungroup()
+  word_roots <- whit$root
+  n_word <- c(pool = nrow(wpool), w2017 = sum(whit$issue_dt >= as.Date("2017-01-01")), w2010 = sum(whit$issue_dt < as.Date("2017-01-01")))
+  all_roots <- union(all_roots, word_roots)
+  log_tbl <- add_row(log_tbl, step = "1c", unit = "projects (permit chains)",
+                     rule = sprintf("Add %s chains that only the work description identifies: %s issued from 2017 on (ADU wording that creates a unit) and %s issued 2010 to 2016 (second-unit wording of that period)",
+                                    fmt(length(word_roots)), fmt(n_word[["w2017"]]), fmt(n_word[["w2010"]])),
+                     remaining = length(all_roots))
+  # Junior ADU rows by issue year, by flag and by wording (addendum 1.3)
+  jadu_years <- raw %>% filter(!is.na(issue_dt)) %>%
+    mutate(yr = year(issue_dt), j_flag = coalesce(as_num(JUNIOR_ADU), 0) != 0,
+           j_word = str_detect(toupper(coalesce(WORK_DESC, "")), "\\bJADU\\b|JUNIOR ACCESS\\w* DWELL|\\bJR\\.? ?ADU\\b|\\bJR\\.? ACCESS\\w* DWELL")) %>%
+    group_by(yr) %>% summarise(flag_rows = sum(j_flag), wording_rows = sum(j_word), .groups = "drop")
+
   # Statuses seen on ADU-related rows issued since 2017
   status_rows <- raw %>%
     filter(!is.na(issue_dt), issue_dt >= as.Date("2017-01-01"),
@@ -741,8 +816,8 @@ if (run3) {
   chain <- raw %>% filter(root %in% all_roots) %>% arrange(root, issue_dt, PERMIT_NBR)
   first_flag <- chain %>%
     group_by(root) %>%
-    mutate(has_flag = any(units_row != 0)) %>%
-    filter(if (first(has_flag)) units_row != 0 else TRUE) %>%
+    mutate(has_flag = any(units_row != 0), is_whit = PERMIT_NBR %in% whit$PERMIT_NBR, has_whit = any(is_whit)) %>%
+    filter(if (first(has_flag)) units_row != 0 else if (first(has_whit)) is_whit else TRUE) %>%
     slice(1) %>% ungroup() %>%
     transmute(root, ff_permit = PERMIT_NBR, ff_issue_dt = issue_dt, pin = PIN_NBR, apn = APN,
               cpa_raw = CPA, lat = as_num(LAT), lon = as_num(LON), sub_type = PERMIT_SUB_TYPE,
@@ -770,16 +845,28 @@ if (run3) {
                                    has_cofostat ~ "CofO status, no date", has_fin ~ "Finaled or CofC",
                                    TRUE ~ "Completed, no date"))
   projects <- first_flag %>% inner_join(agg, by = "root") %>%
-    mutate(source_rule = if_else(root %in% sec_roots, "use-type/description", "inventory flag"),
-           units = if_else(source_rule == "use-type/description" & units <= 0, 1, units))
+    mutate(source_rule = case_when(root %in% sec_roots ~ "use-type/description",
+                                   root %in% word_roots ~ "work-description wording",
+                                   TRUE ~ "inventory flag"),
+           units = if_else(source_rule != "inventory flag" & units <= 0, 1, units))
   log_tbl <- add_row(log_tbl, step = "2", unit = "projects",
                      rule = "Collapse supplements into projects (middle group floored to 10,000); units = largest positive row + negative rows",
                      remaining = nrow(projects))
 
-  # Step 2b: merge duplicate chains (same first and last permit-number groups and PIN)
+  # Step 2a: a wording-identified chain that duplicates a project already
+  # counted by flag or use type (step 2b's key) is dropped, so that project is
+  # left exactly as it was.
   projects <- projects %>%
     mutate(gkey = if_else(is.na(pin), paste0("solo|", root),
-                          paste(str_sub(root, 1, 5), str_sub(root, 13, 17), pin, sep = "|"))) %>%
+                          paste(str_sub(root, 1, 5), str_sub(root, 13, 17), pin, sep = "|")))
+  dup_word <- projects$source_rule == "work-description wording" &
+    projects$gkey %in% projects$gkey[projects$source_rule != "work-description wording"]
+  projects <- projects[!dup_word, ]
+  log_tbl <- add_row(log_tbl, step = "2a", unit = "projects", remaining = nrow(projects),
+                     rule = "Drop wording-identified chains that duplicate a project already counted (same first and last permit-number groups and same PIN_NBR)")
+
+  # Step 2b: merge duplicate chains (same first and last permit-number groups and PIN)
+  projects <- projects %>%
     group_by(gkey) %>%
     arrange(desc(units), ff_issue_dt, .by_group = TRUE) %>%
     summarise(across(c(root, ff_permit, pin, apn, cpa_raw, lat, lon, sub_type, work_desc,
@@ -843,24 +930,37 @@ if (run3) {
                      rule = sprintf("Assign one status: completed, stalled (last status change on or before %s), or in progress",
                                     format(stall_cutoff, "%B %d, %Y")))
 
+  # Projects first permitted before the window are kept beside it (addendum 1.1)
+  projects_pre <- projects %>%
+    filter(!is.na(ff_issue_dt), ff_issue_dt < as.Date("2017-01-01")) %>%
+    mutate(issue_year = year(ff_issue_dt))
   # Step 8: keep projects whose first ADU-flagged permit was issued in the window
   projects <- projects %>%
     filter(!is.na(ff_issue_dt), ff_issue_dt >= as.Date("2017-01-01"), ff_issue_dt <= data_asof) %>%
     mutate(issue_year = year(ff_issue_dt))
   log_tbl <- add_row(log_tbl, step = "8", unit = "projects", remaining = nrow(projects),
-                     rule = sprintf("Keep projects whose first ADU-flagged permit was issued January 1, 2017 to %s",
+                     rule = sprintf("Keep projects whose first ADU permit was issued January 1, 2017 to %s (projects first permitted 2010 to 2016 are kept in their own table)",
                                     format(data_asof, "%B %d, %Y")))
   log_tbl <- log_tbl %>% mutate(dropped = lag(remaining) - remaining,
-                                dropped = if_else(step %in% c("0", "1", "1b", "2"), NA_real_, dropped))
+                                dropped = if_else(step %in% c("0", "1", "1b", "1c", "2"), NA_real_, dropped))
 
-  saveRDS(list(projects = projects, log_tbl = log_tbl, status_rows = status_rows,
-               data_asof = data_asof, stall_cutoff = stall_cutoff,
+  saveRDS(list(projects = projects, projects_pre = projects_pre, log_tbl = log_tbl, status_rows = status_rows,
+               data_asof = data_asof, stall_cutoff = stall_cutoff, jadu_years = jadu_years, n_word = n_word,
                n_sec_final = sum(projects$source_rule == "use-type/description")), f_projects)
-  rm(raw, chain, agg, first_flag, sec_pool); invisible(gc())
+  rm(raw, chain, agg, first_flag, sec_pool, wpool, wref); invisible(gc())
 }
 s3 <- readRDS(f_projects)
-projects <- s3$projects; log_tbl <- s3$log_tbl %>% mutate(rule = if_else(step == "0", "Merge the two datasets of all permits", rule)); data_asof <- s3$data_asof; stall_cutoff <- s3$stall_cutoff
-window_label <- paste0("January 1, 2017 to ", format(data_asof, "%B %e, %Y") %>% str_squish())
+# Source tag: how each ADU was found (addendum 1.1). The use-type rule and the
+# wording rule are both "description-identified".
+tag_levels <- c("LADBS permitted, 2017 to present", "Older permitted, 2010 to 2016", "Grandfathered (Assessor record)")
+found_by <- function(r) recode(r, "inventory flag" = "ADU tag (step 1)", "use-type/description" = "ADU use type (step 1b)",
+                               "work-description wording" = "Work-description wording (step 1c)", "assessor use code" = "Assessor use code (step 9)")
+projects <- s3$projects %>% mutate(source_tag = factor(tag_levels[1], levels = tag_levels))
+projects_pre <- s3$projects_pre %>% mutate(source_tag = factor(tag_levels[2], levels = tag_levels))
+proj_v11 <- filter(projects, source_rule != "work-description wording")   # the set before the wording rule
+log_tbl <- s3$log_tbl %>% mutate(rule = if_else(step == "0", "Merge the two datasets of all permits", rule)); data_asof <- s3$data_asof; stall_cutoff <- s3$stall_cutoff
+ladbs_window <- paste0("January 1, 2017 to ", format(data_asof, "%B %e, %Y") %>% str_squish())      # the LADBS permitted group
+window_label <- paste0("all ADUs identified through ", format(data_asof, "%B %e, %Y") %>% str_squish())   # every tag, counted together
 
 # ---- Stage 3 checks ----------------------------------------------------------
 st_n <- table(projects$status)
@@ -882,8 +982,31 @@ qa_add(0, "Permit extract download date read from the file name", "a date", form
 qa_add(3, "Stalled cutoff = data_asof minus 3 years", "2023-10-31", format(stall_cutoff),
        stall_cutoff == as.Date("2023-10-31"))
 # Benchmarks from earlier computations
-qa_add(3, "Earlier run: projects citywide", "51,467", fmt(nrow(projects)), nrow(projects) == 51467)
-qa_add(3, "Earlier run: units citywide", "55,155", fmt(sum(projects$units)), sum(projects$units) == 55155)
+# The earlier-run targets below are checked on the set before the wording rule
+# (flag and use-type projects), so they show that rule moved nothing else.
+qa_add(3, "Earlier run: projects citywide (before the wording rule)", "51,467", fmt(nrow(proj_v11)), nrow(proj_v11) == 51467)
+qa_add(3, "Earlier run: units citywide (before the wording rule)", "55,155", fmt(sum(proj_v11$units)), sum(proj_v11$units) == 55155)
+n_wd <- sum(projects$source_rule == "work-description wording")
+qa_add(3, "Before and after the wording rule: projects citywide", "51,467 before",
+       sprintf("%s after (+%s)", fmt(nrow(projects)), fmt(n_wd)), nrow(projects) == nrow(proj_v11) + n_wd, stop_if_fail = TRUE)
+qa_add(3, "Before and after the wording rule: units citywide", "55,155 before",
+       sprintf("%s after (+%s)", fmt(sum(projects$units)), fmt(sum(projects$units) - sum(proj_v11$units))),
+       sum(projects$units) >= sum(proj_v11$units))
+qa_add(3, "Projects permitted 2010 to 2016, kept beside the main counts (flag / wording)", "a count",
+       sprintf("%s (%s / %s)", fmt(nrow(projects_pre)), fmt(sum(projects_pre$source_rule != "work-description wording")),
+               fmt(sum(projects_pre$source_rule == "work-description wording"))), nrow(projects_pre) > 0)
+# Hand check of the wording rules (one reader; see the hand-check file)
+hc <- if (file.exists(params$path_handcheck)) read_csv(params$path_handcheck, show_col_types = FALSE) else NULL
+if (!is.null(hc)) {
+  hc_n <- hc %>% group_by(rule) %>% summarise(read = n(), hold = sum(creates_a_unit == "yes"), .groups = "drop")
+  for (i in seq_len(nrow(hc_n)))
+    qa_add(3, paste0("Hand check, ", hc_n$rule[i], ": descriptions that create a unit"), "at least 95 of 100",
+           sprintf("%d of %d", hc_n$hold[i], hc_n$read[i]), hc_n$hold[i] / hc_n$read[i] >= 0.95)
+} else qa_add(3, "Hand check file for the wording rules is present", "present", "missing", FALSE,
+              reason = "The hand-check file was not found at params$path_handcheck; the rule itself is unchanged.")
+# Junior ADUs: none expected before 2020 (AB 68 took effect January 1, 2020)
+j_pre <- s3$jadu_years %>% filter(yr >= 2017, yr <= 2019) %>% summarise(f = sum(flag_rows), w = sum(wording_rows))
+qa_add(3, "Junior ADU rows issued 2017 to 2019 (flag / wording)", "0 / near 0", sprintf("%s / %s", fmt(j_pre$f), fmt(j_pre$w)), j_pre$f == 0)
 # The status benchmark came from an earlier test computation. Compare
 # with the earlier R output too: completed units should match it exactly, and
 # the <= cutoff should move exactly the units whose last status change falls on
@@ -893,13 +1016,17 @@ old_out <- read_csv(params$path_old_projects, col_types = cols(.default = "c")) 
                                                    str_starts(outcome, "Stalled") ~ "Stalled",
                                                    TRUE ~ "In progress"))
 old_u <- tapply(old_out$units, old_out$status, sum)
-at_cutoff <- sum(projects$units[!projects$completed & projects$last_activity %in% stall_cutoff])
-consistent_old <- st_u[["Completed"]] == old_u[["Completed"]] &&
-  st_u[["Stalled"]] == old_u[["Stalled"]] + at_cutoff &&
-  st_u[["In progress"]] == old_u[["In progress"]] - at_cutoff
-qa_add(3, "Earlier run: units completed / in progress / stalled", "39,575 / 11,812 / 3,768",
-       paste(fmt(st_u[c("Completed", "In progress", "Stalled")]), collapse = " / "),
-       all(st_u[c("Completed", "In progress", "Stalled")] == c(39575, 11812, 3768)),
+at_cutoff <- sum(proj_v11$units[!proj_v11$completed & proj_v11$last_activity %in% stall_cutoff])
+st_v <- tapply(proj_v11$units, proj_v11$status, sum)
+consistent_old <- st_v[["Completed"]] == old_u[["Completed"]] &&
+  st_v[["Stalled"]] == old_u[["Stalled"]] + at_cutoff &&
+  st_v[["In progress"]] == old_u[["In progress"]] - at_cutoff
+qa_add(3, "Before and after the wording rule: units completed / in progress / stalled", "39,575 / 11,812 / 3,768 before",
+       paste0(paste(fmt(st_u[c("Completed", "In progress", "Stalled")]), collapse = " / "), " after"),
+       all(st_u[c("Completed", "In progress", "Stalled")] >= st_v[c("Completed", "In progress", "Stalled")]))
+qa_add(3, "Earlier run: units completed / in progress / stalled (before the wording rule)", "39,575 / 11,812 / 3,768",
+       paste(fmt(st_v[c("Completed", "In progress", "Stalled")]), collapse = " / "),
+       all(st_v[c("Completed", "In progress", "Stalled")] == c(39575, 11812, 3768)),
        reason = if (consistent_old) sprintf(
          "The target came from an earlier test computation. Completed units equal the earlier R output exactly (%s); the <= cutoff moves the %d units whose last status change is exactly %s from in progress to stalled (earlier split %s / %s / %s).",
          fmt(old_u[["Completed"]]), at_cutoff, format(stall_cutoff), fmt(old_u[["Completed"]]),
@@ -907,46 +1034,22 @@ qa_add(3, "Earlier run: units completed / in progress / stalled", "39,575 / 11,8
 qa_add(3, "Earlier run: step 1b projects in the final table", "918", fmt(s3$n_sec_final), s3$n_sec_final == 918)
 qa_add(3, "Earlier run: ADU-related rows issued since 2017", "65,728",
        fmt(sum(s3$status_rows$rows)), sum(s3$status_rows$rows) == 65728)
-n_cofostat <- sum(projects$completion_basis %in% "CofO status, no date")
-n_fin <- sum(projects$completion_basis %in% "Finaled or CofC")
-merged_diff <- sum(projects$n_chains > 1 & coalesce(projects$chain_basis, "-") != coalesce(projects$completion_basis, "-"))
+n_cofostat <- sum(proj_v11$completion_basis %in% "CofO status, no date")
+n_fin <- sum(proj_v11$completion_basis %in% "Finaled or CofC")
+merged_diff <- sum(proj_v11$n_chains > 1 & coalesce(proj_v11$chain_basis, "-") != coalesce(proj_v11$completion_basis, "-"))
 qa_add(3, "Earlier run: completed projects dated by CofO status without a date / by Finaled or CofC",
        "610 / 1,357", paste(fmt(n_cofostat), fmt(n_fin), sep = " / "), n_cofostat == 610 & n_fin == 1357,
        reason = if (abs(n_cofostat - 610) + abs(n_fin - 1357) <= merged_diff) sprintf(
          "The target counted each project's own permit chain. Step 2b merges duplicate chains, and in %d merged projects the merged chain has a different completion basis (a CofO date on the other chain, or completion only on the other chain); the gap is within those.",
          merged_diff) else NA_character_)
 qa_add(3, "Earlier run: projects dated by issue date because SUBMITTED_DATE is blank", "56",
-       fmt(sum(projects$submitted_from_issue)), sum(projects$submitted_from_issue) == 56)
+       fmt(sum(proj_v11$submitted_from_issue)), sum(proj_v11$submitted_from_issue) == 56)
 qa_add(3, "Earlier run: projects submitted before 2017", "224",
-       fmt(sum(projects$submitted < as.Date("2017-01-01"))), sum(projects$submitted < as.Date("2017-01-01")) == 224)
+       fmt(sum(proj_v11$submitted < as.Date("2017-01-01"))), sum(proj_v11$submitted < as.Date("2017-01-01")) == 224)
 ```
-
-```{r stage3-tables}
-log_tbl %>%
-  transmute(Step = step, Rule = rule, Unit = unit, Remaining = fmt(remaining),
-            Dropped = if_else(is.na(dropped), "", fmt(dropped))) %>%
-  tbl(caption = "Filtering log: ADU identification, citywide",
-      note = paste0("LADBS Building Permits Issued datasets (2010–2019 and 2020–present), refreshed November 1, 2026 and downloaded ", fmt_date(extract_date),
-                    ". A permit chain is an original permit plus its supplements. Window: ", window_label, "."))
-
-s3$status_rows %>%
-  mutate(Treatment = case_when(STATUS_DESC %in% completed_statuses ~ "Completed",
-                               STATUS_DESC %in% invalid_statuses ~ "Not active, unless the chain shows completion",
-                               TRUE ~ "Open: in progress or stalled by date")) %>%
-  transmute(STATUS_DESC, Rows = rows, Treatment) %>%
-  tbl(caption = "Statuses seen on ADU-related permit rows issued since 2017 (permit rows)",
-      note = "Rows are permits with a nonzero ADU flag or an ADU use type, supplements included, so they do not equal project counts. Any status not in the completed or not-active lists is treated as open and printed in the QA log.")
-```
-
-## Joining ADUs to parcels, tracts and CPAs
-
-Each project joins to a County parcel in three steps: the permit APN to the parcel AIN; then, if unmatched, the permit `PIN_NBR` to the City parcel file's PIN, whose BPP gives the APN; then, if still unmatched, the parcel containing the project's coordinates, or the nearest parcel within 50 ft. A project inherits its parcel's AIN (`prop_id`), CPA, tract, land use class, lot size and hillside-fire flag, so ADU counts and lot counts share one parcel ID. A project that no step places keeps its permit CPA text for CPA totals, with property type "unknown".
-
-The Assessor's four-character property use code records ADUs on single-family parcels. In a code such as `01D6`, the characters read 0 = residential, 1 = single-family residence, D = detached and 6 = "ADU - Accessory Dwelling Unit (less than 1,200 sq ft, kitchen and bath)"; the [Assessor Portal](https://portal.assessor.lacounty.gov/) decodes each character on a parcel's detail page. Single-family parcels whose fourth use-code character is 6 but that hold no project are tagged **older or unpermitted ADUs** (`older_adu`). They get their own count and are never added to permitted ADU units.
-
 ```{r stage4-join}
 # =============================================================================
-# STAGE 4. ADU-TO-PARCEL JOIN (with the older or unpermitted ADU tag)
+# STAGE 4. ADU-TO-PARCEL JOIN (with the Grandfathered ADU tag)
 # Joins projects to properties, then assigns tract, CPA and property type from
 # the property. Tags single-family parcels coded as having an ADU but holding no
 # project as older_adu.
@@ -954,7 +1057,8 @@ The Assessor's four-character property use code records ADUs on single-family pa
 # =============================================================================
 if (run4) {
   pc <- parcel_class %>% filter(!is.na(AIN), AIN != "") %>% distinct(AIN, .keep_all = TRUE)
-  p <- projects %>%
+  # Projects permitted 2010 to 2016 are joined the same way and kept apart
+  p <- bind_rows(projects %>% mutate(pre2017 = FALSE), projects_pre %>% mutate(pre2017 = TRUE)) %>%
     mutate(apn10 = str_trim(apn), pin_n = str_squish(pin), prop_id = NA_character_, join_step = NA_character_)
 
   # Step 1: permit APN = parcel AIN
@@ -1014,7 +1118,7 @@ if (run4) {
   p$join_step[is.na(p$prop_id)] <- "4. Unmatched (permit CPA text)"
 
   # Inherit parcel attributes
-  adu <- p %>%
+  adu_all <- p %>%
     left_join(pc %>% select(prop_id = AIN, parcel_cpa = cpa, ct20, tract_cpa, land_use,
                             lot_sqft, hillside_fire, in_roll, use_type, pt_x, pt_y),
               by = "prop_id") %>%
@@ -1026,51 +1130,71 @@ if (run4) {
              sub_type %in% "Apartment" ~ "Multi-family",   # fallback
              TRUE ~ "Unknown"))
 
-  # older_adu: SFR parcels coded 6 that the full join ties to no permitted project
+  adu <- filter(adu_all, !pre2017); adu_pre <- filter(adu_all, pre2017)
+  is_v11 <- !p$pre2017 & p$source_rule != "work-description wording"   # the set before the wording rule
+
+  # older_adu (Assessor-only): SFR parcels coded 6 that the full join ties to no
+  # permitted project, 2010 to 2016 projects included. older_v11 is the earlier
+  # definition (2017-on flag and use-type projects only), kept for the checks.
   parcel_class <- parcel_class %>%
-    mutate(older_adu = adu_code6 & !(AIN %in% adu$prop_id))
+    mutate(older_adu = adu_code6 & !(AIN %in% adu_all$prop_id),
+           older_v11 = adu_code6 & !(AIN %in% adu_all$prop_id[is_v11]))
   older_counts <- parcel_class %>% filter(older_adu) %>% count(cpa, ct20, name = "older_adu")
+  older_counts_v11 <- parcel_class %>% filter(older_v11) %>% count(cpa, name = "older_adu")
 
   # ---- Diagnostics for the benchmarks ---------
   # (a) Permit APNs that are County AINs outside the City parcel table
   un_apn <- unique(p$apn10[!(p$apn10 %in% pc$AIN) & str_detect(coalesce(p$apn10, ""), "^[0-9]{10}$")])
   apn_outside_set <- read_ains(un_apn)$AIN
-  n_apn_outside <- sum(p$apn10 %in% apn_outside_set)
+  n_apn_outside <- sum(p$apn10[is_v11] %in% apn_outside_set)
   # (a2) PIN-step BPPs that are County AINs outside the City parcel table, for
   #      projects the target's PIN step would have seen
   county_bpp <- read_ains(unique(bpp2[!is.na(bpp2) & !(bpp2 %in% pc$AIN)]))$AIN
-  n_pin_bpp_county_outside <- sum(!is.na(bpp2) & bpp2 %in% county_bpp & !(p$apn10[i2] %in% apn_outside_set))
+  n_pin_bpp_county_outside <- sum(is_v11[i2] & !is.na(bpp2) & bpp2 %in% county_bpp & !(p$apn10[i2] %in% apn_outside_set))
   # (b) Tagged parcels that contain the point of a project already placed by
   #     APN or PIN (an earlier test removed these too)
-  tag_cand <- parcel_class$AIN[parcel_class$older_adu]
+  tag_cand <- parcel_class$AIN[parcel_class$older_v11]
   tag_poly <- read_ains(tag_cand)
-  allpts <- adu %>% filter(!is.na(lat), !is.na(lon), lat != 0, lon != 0) %>%
+  allpts <- adu_all[is_v11, ] %>% filter(!is.na(lat), !is.na(lon), lat != 0, lon != 0) %>%
     st_as_sf(coords = c("lon", "lat"), crs = crs_web) %>% st_transform(crs_ft)
   hit_tag <- unique(tag_poly$AIN[unlist(st_intersects(allpts, tag_poly))])
   hit_tag_cpa <- parcel_class %>% filter(AIN %in% hit_tag) %>% count(cpa)
 
-  saveRDS(list(adu = adu, older_counts = older_counts,
+  saveRDS(list(adu = adu, adu_pre = adu_pre, older_counts = older_counts, older_counts_v11 = older_counts_v11,
+               n_code6_with_any = sum(parcel_class$adu_code6 & parcel_class$AIN %in% adu_all$prop_id),
                n_apn_outside = n_apn_outside, n_pin_bpp_outside = n_pin_bpp_outside,
                n_pin_bpp_county_outside = n_pin_bpp_county_outside,
                hit_tag = hit_tag, hit_tag_cpa = hit_tag_cpa,
                n_code6 = sum(parcel_class$adu_code6),
-               n_code6_with_project = sum(parcel_class$adu_code6 & parcel_class$AIN %in% adu$prop_id),
+               n_code6_with_project = sum(parcel_class$adu_code6 & parcel_class$AIN %in% adu_all$prop_id[is_v11]),
                n_city_pins = n_city_pins, n_coord_tried = n_coord_tried), f_joined)
 }
 s4 <- readRDS(f_joined)
-adu <- s4$adu; older_counts <- s4$older_counts
+adu <- s4$adu; adu_pre <- s4$adu_pre; older_counts <- s4$older_counts
+adu_v11 <- filter(adu, source_rule != "work-description wording")   # the set before the wording rule
 adu_focus <- adu %>% filter(cpa %in% focus_cpas)
 if (!"older_adu" %in% names(parcel_class))
   parcel_class <- parcel_class %>%
-    mutate(older_adu = adu_code6 & !(AIN %in% adu$prop_id))
+    mutate(older_adu = adu_code6 & !(AIN %in% c(adu$prop_id, adu_pre$prop_id)))
+# Step 9. Grandfathered ADUs: one completed unit per single-family parcel the roll codes as
+# having an ADU and that holds no permitted ADU. No permit, so no dates and no issue year.
+adu_gf <- st_drop_geometry(parcel_class) %>% filter(older_adu) %>%
+  transmute(root = paste0("ASR-", AIN), prop_id = AIN, cpa, parcel_cpa = cpa, ct20, tract_cpa, land_use, lot_sqft, hillside_fire,
+            in_roll, use_type, pt_x, pt_y, property_type = "Single-family", units = 1, status = "Completed", completed = TRUE,
+            source_rule = "assessor use code", source_tag = factor(tag_levels[3], levels = tag_levels), join_step = "Assessor record", n_chains = 1L)
+qa_add(4, "Grandfathered ADUs: one row per parcel, none on a parcel with a permitted ADU", fmt(sum(parcel_class$older_adu)), fmt(nrow(adu_gf)),
+       !any(duplicated(adu_gf$prop_id)) && !any(adu_gf$prop_id %in% c(adu$prop_id, adu_pre$prop_id)) && nrow(adu_gf) == sum(parcel_class$older_adu), stop_if_fail = TRUE)
 prop_sf <- prop_sf %>% left_join(st_drop_geometry(parcel_class) %>% select(AIN, older_adu), by = "AIN")
 
 # ---- Stage 4 checks ----------------------------------------------------------
 match_rate <- mean(!is.na(adu$prop_id))
 qa_add(4, "Projects matched to a parcel, citywide", ">= 99%", pct(match_rate, 2), match_rate >= 0.99,
        stop_if_fail = TRUE)
+match_pre <- mean(!is.na(adu_pre$prop_id))
+qa_add(4, "Projects permitted 2010 to 2016 matched to a parcel", "reported", pct(match_pre, 2), TRUE)
 steps <- adu %>% count(join_step)
-step_n <- function(s) sum(steps$n[str_starts(steps$join_step, s)])
+steps_v11 <- adu_v11 %>% count(join_step)   # earlier-run targets are checked on the set before the wording rule
+step_n <- function(s) sum(steps_v11$n[str_starts(steps_v11$join_step, s)])
 qa_add(4, "Earlier run: step 1, permit APN = parcel AIN (projects)", "50,922", fmt(step_n("1.")), step_n("1.") == 50922,
        reason = if (step_n("1.") + s4$n_apn_outside == 50922) sprintf(
          "The target matched permit APNs against every County AIN; this build matches City parcels only (interior point in a City CPA). %d projects carry the APN of a County parcel outside the City and are placed by the later steps.",
@@ -1086,44 +1210,115 @@ disagree <- adu %>% filter(!is.na(parcel_cpa)) %>% summarise(n = sum(parcel_cpa 
 qa_add(4, "Projects whose parcel CPA differs from the permit CPA text", "reported",
        paste0(fmt(disagree$n), " (", pct(disagree$share, 2), ")"), TRUE)
 
-older_six <- older_counts %>% group_by(cpa) %>% summarise(n = sum(older_adu))
+older_six <- s4$older_counts_v11 %>% group_by(cpa) %>% summarise(n = sum(older_adu))
+older_six_new <- older_counts %>% group_by(cpa) %>% summarise(n = sum(older_adu))
 older_exp <- c("Arleta - Pacoima" = 18, "West Adams - Baldwin Hills - Leimert" = 16, "South Los Angeles" = 13,
                "Southeast Los Angeles" = 28, "Northeast Los Angeles" = 17, "Boyle Heights" = 3)
 older_obs <- older_six$n[match(names(older_exp), older_six$cpa)] %>% coalesce(0L)
 hit_six <- s4$hit_tag_cpa$n[match(names(older_exp), s4$hit_tag_cpa$cpa)] %>% coalesce(0L)
 older_reason <- "The target came from a test that also removed tagged parcels containing the point of a project already placed by APN or PIN; stage 4 uses coordinates only for projects the first two steps miss,."
-qa_add(4, "Earlier run: older or unpermitted ADUs, six CPAs (18 / 16 / 13 / 28 / 17 / 3)", "95",
+qa_add(4, "Earlier run: Grandfathered ADUs, six CPAs (18 / 16 / 13 / 28 / 17 / 3)", "95",
        paste0(fmt(sum(older_obs)), " (", paste(older_obs, collapse = " / "), ")"), all(older_obs == older_exp),
        reason = if (all(older_obs - hit_six == older_exp)) paste(older_reason,
          sprintf("Removing those %d parcels here reproduces the target exactly.", sum(hit_six))) else NA_character_)
-n_older <- sum(older_counts$older_adu)
-qa_add(4, "Earlier run: older or unpermitted ADUs, citywide", "503", fmt(n_older), n_older == 503,
+n_older_v11 <- sum(s4$older_counts_v11$older_adu)
+qa_add(4, "Earlier run: Grandfathered ADUs, citywide", "503", fmt(n_older_v11), n_older_v11 == 503,
        reason = sprintf("%s Removing those %d parcels here gives %s; the remaining difference of %d comes from the universe (the target used the roll's City parcels, this build uses parcel polygons in City CPAs).",
-                        older_reason, length(s4$hit_tag), fmt(n_older - length(s4$hit_tag)),
-                        503 - (n_older - length(s4$hit_tag))))
+                        older_reason, length(s4$hit_tag), fmt(n_older_v11 - length(s4$hit_tag)),
+                        503 - (n_older_v11 - length(s4$hit_tag))))
+n_older <- sum(older_counts$older_adu)
+older_new_six <- older_six_new$n[match(names(older_exp), older_six_new$cpa)] %>% coalesce(0L)
+qa_add(4, "Before and after the wording rule: Grandfathered ADUs, citywide", paste0(fmt(n_older_v11), " before"),
+       sprintf("%s after (%s now tied to a permit found by wording)", fmt(n_older), fmt(n_older_v11 - n_older)), n_older <= n_older_v11)
+qa_add(4, "Before and after the wording rule: Grandfathered ADUs, six CPAs", paste0(fmt(sum(older_obs)), " before"),
+       paste0(fmt(sum(older_new_six)), " after (", paste(older_new_six, collapse = " / "), ")"), sum(older_new_six) <= sum(older_obs))
 qa_add(4, "Earlier run: SFR parcels coded 6 with a permitted project", "96.7%",
        pct(s4$n_code6_with_project / s4$n_code6), round(s4$n_code6_with_project / s4$n_code6, 3) == 0.967,
        reason = "Follows from the older-ADU count above.")
 ```
 
+```{r stage3-tables}
+# Filtering log, with the two groups added after the 2017 window: older permitted
+# ADUs (step 8b) and grandfathered ADUs from the Assessor roll (step 9).
+n_gf <- nrow(adu_gf)
+log_show <- log_tbl %>%
+  mutate(rule = if_else(step == "8", paste0("LADBS permitted ADUs, 2017 to present: keep projects whose first ADU permit was issued ", ladbs_window), rule)) %>%
+  add_row(step = "8b", unit = "projects", rule = "Older permitted ADUs: add the projects first permitted 2010 to 2016 (found by step 1c)",
+          remaining = nrow(projects) + nrow(projects_pre)) %>%
+  add_row(step = "9", unit = "ADUs", rule = "Grandfathered ADUs: add single-family parcels whose 2026 Assessor use code records an ADU and that hold no ADU project (after the parcel join)",
+          remaining = nrow(projects) + nrow(projects_pre) + n_gf)
+qa_add(4, "Filtering log: the last row equals LADBS permitted + older permitted + grandfathered ADUs", fmt(nrow(adu) + nrow(adu_pre) + n_gf),
+       fmt(tail(log_show$remaining, 1)), tail(log_show$remaining, 1) == nrow(adu) + nrow(adu_pre) + n_gf, stop_if_fail = TRUE)
+log_show %>%
+  transmute(Step = step, Rule = rule, Unit = unit, Remaining = fmt(remaining),
+            Dropped = if_else(is.na(dropped), "", fmt(dropped))) %>%
+  tbl(caption = "Filtering log: ADU identification, citywide",
+      note = paste0("LADBS Building Permits Issued datasets (2010–2019 and 2020–present), refreshed November 1, 2026 and downloaded ", fmt_date(extract_date),
+                    ". A permit chain is an original permit plus its supplements. Steps 8b and 9 add ADUs, so Remaining rises. Step 9 uses the 2026 Assessor roll and runs after projects are joined to parcels (next section)."))
+
+# ADUs by tag, citywide and in each candidate CPA
+adu_tagged <- bind_rows(adu %>% transmute(cpa, units, source_tag, source_rule), adu_pre %>% transmute(cpa, units, source_tag, source_rule),
+                        adu_gf %>% transmute(cpa, units, source_tag, source_rule)) %>%
+  mutate(found = found_by(source_rule))
+tag_rows <- adu_tagged %>% distinct(source_tag, found) %>% arrange(source_tag, found)
+tag_cnt <- function(d) tag_rows %>% left_join(d %>% count(source_tag, found, wt = units, name = "n"), by = c("source_tag", "found")) %>% pull(n) %>% coalesce(0)
+tag_tab <- tibble(Tag = as.character(tag_rows$source_tag), `Found by` = tag_rows$found)
+for (cc in focus_cpas) tag_tab[[cc]] <- tag_cnt(filter(adu_tagged, cpa == cc))
+tag_tab[["All six CPAs"]] <- tag_cnt(filter(adu_tagged, cpa %in% focus_cpas)); tag_tab[["Citywide"]] <- tag_cnt(adu_tagged)
+tag_tot <- tag_tab %>% summarise(across(where(is.numeric), sum)) %>% mutate(Tag = "All ADUs", `Found by` = "")
+qa_add(4, "ADUs by tag: tags sum to all ADU units, citywide", fmt(sum(adu_tagged$units)), fmt(tag_tot$Citywide), tag_tot$Citywide == sum(adu_tagged$units), stop_if_fail = TRUE)
+tag_html <- bind_rows(tag_tab, tag_tot) %>% mutate(across(where(is.numeric), fmt)) %>% select(-Tag) %>%
+  kable(format = "html", caption = "ADUs by tag, citywide and in the six candidate CPAs (ADU units)", align = c("l", rep("r", 8))) %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = TRUE, font_size = 12) %>%
+  pack_rows(tag_levels[1], 1, sum(tag_rows$source_tag == tag_levels[1])) %>%
+  pack_rows(tag_levels[2], sum(tag_rows$source_tag == tag_levels[1]) + 1, sum(tag_rows$source_tag != tag_levels[3])) %>%
+  pack_rows(tag_levels[3], nrow(tag_rows), nrow(tag_rows)) %>%
+  row_spec(nrow(tag_rows) + 1, bold = TRUE) %>%
+  footnote(general = "Every ADU carries one tag, and the report counts all of them together. LADBS permitted: first ADU permit issued from January 1, 2017. Older permitted: second-unit or ADU wording on a permit issued 2010 to 2016. Grandfathered: a single-family parcel whose 2026 Assessor use code records an ADU and that holds no ADU from the other two groups; one unit per parcel. Projects are placed by their parcel's location.",
+           general_title = "Note: ", footnote_as_chunk = TRUE, threeparttable = TRUE)
+tag_html
+
+bind_rows(adu, adu_pre) %>% count(issue_year, status, wt = units) %>% pivot_wider(names_from = status, values_from = n, values_fill = 0) %>%
+  mutate(`ADU units` = rowSums(across(-issue_year))) %>% arrange(issue_year) %>% rename(`Issue year` = issue_year) %>% mutate(`Issue year` = as.character(`Issue year`)) %>%
+  tbl(caption = "Permitted ADU units by issue year and status, citywide, 2010 to present (ADU units)",
+      note = "Older permitted ADUs (2010 to 2016) and LADBS permitted ADUs (2017 to present). Grandfathered ADUs have no permit year and are not in this table.")
+s3$jadu_years %>% filter(yr >= 2017) %>% transmute(`Issue year` = as.character(yr), `Permit rows with a junior ADU tag` = fmt(flag_rows), `Permit rows whose description names a junior ADU` = fmt(wording_rows)) %>%
+  tbl(caption = "Junior ADU check: permit rows by issue year (permit rows)",
+      note = "Junior ADUs became available statewide on January 1, 2020 (AB 68). The check is that no junior ADU appears before 2020, by tag or by wording; rows are permits, supplements included.")
+
+s3$status_rows %>%
+  mutate(Treatment = case_when(STATUS_DESC %in% completed_statuses ~ "Completed",
+                               STATUS_DESC %in% invalid_statuses ~ "Not active, unless the chain shows completion",
+                               TRUE ~ "Open: in progress or stalled by date")) %>%
+  transmute(STATUS_DESC, Rows = rows, Treatment) %>%
+  tbl(caption = "Statuses seen on ADU-related permit rows issued since 2017 (permit rows)",
+      note = "Rows are permits with a nonzero ADU flag or an ADU use type, supplements included, so they do not equal project counts. Any status not in the completed or not-active lists is treated as open and printed in the QA log.")
+```
+
+## Joining ADUs to parcels, tracts and CPAs
+
+Each permitted project joins to a County parcel in three steps: the permit APN to the parcel AIN; then, if unmatched, the permit `PIN_NBR` to the City parcel file's PIN, whose BPP gives the APN; then, if still unmatched, the parcel containing the project's coordinates, or the nearest parcel within 50 ft. A project inherits its parcel's AIN (`prop_id`), CPA, tract, land use class, lot size and hillside-fire flag, so ADU counts and lot counts share one parcel ID. A project that no step places keeps its permit CPA text for CPA totals, with property type "unknown". Older permitted projects are joined by the same three steps. Grandfathered ADUs (step 9) start from the parcel, so they need no join: a single-family parcel coded 6 in the 2026 roll is grandfathered when the join ties no permitted ADU to it.
+
 ```{r stage4-tables}
 steps %>%
   mutate(share = n / sum(n)) %>%
   transmute(`Join step` = join_step, `ADU projects` = fmt(n), Share = pct(share, 2)) %>%
-  tbl(caption = "How ADU projects were placed on parcels, citywide (ADU projects)",
-      note = paste0("County parcels exported August 2, 2025; City parcel file for the PIN step. ", window_label, "."))
+  tbl(caption = "How LADBS permitted ADU projects were placed on parcels, citywide (ADU projects)", full_width = TRUE,
+      note = paste0("County parcels exported August 2, 2025; City parcel file for the PIN step. LADBS permitted ADUs, ", ladbs_window, "."))
 
 cmp <- adu_focus %>% group_by(cpa) %>% summarise(by_parcel = sum(units)) %>%
   full_join(adu %>% filter(cpa_text %in% focus_cpas) %>% group_by(cpa = cpa_text) %>%
-              summarise(by_text = sum(units)), by = "cpa") %>%
+              summarise(by_text = sum(units), by_text_v11 = sum(units[source_rule != "work-description wording"])), by = "cpa") %>%
   right_join(focus %>% select(cpa), by = "cpa") %>% arrange(match(cpa, focus_cpas))
 text_exp <- c(2009, 2972, 3440, 2283, 3032, 499)
 qa_add(4, "Earlier run: ADU units by permit CPA text, six CPAs",
-       paste(fmt(text_exp), collapse = " / "), paste(fmt(cmp$by_text), collapse = " / "), all(cmp$by_text == text_exp))
+       paste(fmt(text_exp), collapse = " / "), paste(fmt(cmp$by_text_v11), collapse = " / "), all(cmp$by_text_v11 == text_exp))
+qa_add(4, "Before and after the wording rule: ADU units by permit CPA text, six CPAs",
+       paste0(paste(fmt(text_exp), collapse = " / "), " before"), paste0(paste(fmt(cmp$by_text), collapse = " / "), " after"), all(cmp$by_text >= cmp$by_text_v11))
 cmp %>% transmute(CPA = cpa, `By parcel location` = fmt(by_parcel), `By permit CPA text` = fmt(by_text),
                   Difference = fmt(by_parcel - by_text)) %>%
-  tbl(caption = "ADU units by CPA: parcel location versus the permit's own CPA text (ADU units)",
-      note = paste0("The report assigns every project to the CPA of its parcel. ", window_label, "."))
+  tbl(caption = "ADU units by CPA: parcel location versus the permit's own CPA text (ADU units)", full_width = TRUE,
+      note = paste0("The report assigns every project to the CPA of its parcel. LADBS permitted ADUs, ", ladbs_window, "."))
 ```
 
 ## ACS variables and margins of error
@@ -1293,6 +1488,112 @@ qa_add(5, "Vacancy formulas reproduce DP04_0004 / DP04_0005 within rounding (tra
        paste(vac_chk$off_hv, vac_chk$off_rv, sep = " / "), vac_chk$off_hv == 0 && vac_chk$off_rv == 0)
 qa_add(5, "Metro median family income, B19113_001, CBSA 31080", "$108,949", paste0("$", fmt(metro_mfi)),
        metro_mfi == 108949)
+```
+
+```{r stage5-change}
+# =============================================================================
+# STAGE 5 (part 2). HOMEOWNERSHIP CHANGE, 2015-2019 TO 2020-2024
+# The 2015-2019 ACS uses 2010 tracts and the 2020-2024 ACS uses 2020 tracts.
+# CPA totals: 2010 tracts are assigned to CPAs by the same 50% rule and summed.
+# Tract maps: the Census 2010-to-2020 relationship file links the two; tracts
+# that were split or merged are compared as the smallest group of tracts that
+# matches in both years. Change = later minus earlier. MOE of a change = root
+# sum of squares of the two periods' margins; shares use the Census formula for
+# a derived proportion in each period first. A change larger than its margin is
+# significant at 90%.
+# =============================================================================
+chg_vars <- c(hh = "B25003_001", own = "B25003_002", blk_hh = "B25003B_001", blk_own = "B25003B_002",
+              lat_hh = "B25003I_001", lat_own = "B25003I_002")
+f_acs19 <- file.path(dir_derived, "acs_tract_2015_2019_tenure.csv")
+if (params$refresh || !file.exists(f_acs19)) {
+  census_api_key(Sys.getenv("CENSUS_API_KEY"))
+  get_acs(geography = "tract", state = "CA", county = "Los Angeles", variables = unname(chg_vars),
+          year = 2019, survey = "acs5") %>% clean_acs() %>% select(GEOID, variable, estimate, moe) %>% write_csv(f_acs19)
+}
+chg_wide <- function(long) long %>% filter(variable %in% chg_vars) %>%
+  mutate(nm = names(chg_vars)[match(variable, chg_vars)]) %>% select(GEOID, nm, estimate, moe) %>%
+  pivot_wider(names_from = nm, values_from = c(estimate, moe), names_glue = "{substr(.value, 1, 1)}_{nm}")
+t19 <- chg_wide(read_csv(f_acs19, col_types = cols(GEOID = "c", variable = "c", .default = "d")))   # 2010 tracts
+t24 <- chg_wide(acs_long_all)                                                                       # 2020 tracts
+chg_sum <- function(d, by) d %>% group_by(across(all_of(by))) %>%          # counts add; margins by root sum of squares
+  summarise(across(starts_with("e_"), ~ sum(.x, na.rm = TRUE)), across(starts_with("m_"), ~ sqrt(sum(.x^2, na.rm = TRUE))), .groups = "drop")
+p_moe <- function(ne, nm, de, dm) {                                        # Census derived-proportion margin
+  p <- ne / de; rad <- nm^2 - p^2 * dm^2
+  ifelse(de > 0, sqrt(ifelse(rad >= 0, rad, nm^2 + p^2 * dm^2)) / de, NA_real_)
+}
+chg_measures <- function(d, id) {                                          # long: one row per unit and measure
+  cnt <- function(key, lab, e, m) tibble(unit = d[[id]], key = key, measure = lab, type = "count", est = e, moe = m)
+  prp <- function(key, lab, ne, nm, de, dm) tibble(unit = d[[id]], key = key, measure = lab, type = "rate",
+                                                   est = ifelse(de > 0, ne / de, NA_real_), moe = p_moe(ne, nm, de, dm))
+  bind_rows(
+    cnt("hh", "Households", d$e_hh, d$m_hh), cnt("own", "Owner households", d$e_own, d$m_own),
+    prp("own_rate", "Homeownership rate", d$e_own, d$m_own, d$e_hh, d$m_hh),
+    cnt("blk_hh", "Black households", d$e_blk_hh, d$m_blk_hh), cnt("blk_own", "Black owner households", d$e_blk_own, d$m_blk_own),
+    prp("blk_rate", "Share of Black households who own", d$e_blk_own, d$m_blk_own, d$e_blk_hh, d$m_blk_hh),
+    prp("blk_shr", "Black share of owner households", d$e_blk_own, d$m_blk_own, d$e_own, d$m_own),
+    cnt("lat_hh", "Latino households", d$e_lat_hh, d$m_lat_hh), cnt("lat_own", "Latino owner households", d$e_lat_own, d$m_lat_own),
+    prp("lat_rate", "Share of Latino households who own", d$e_lat_own, d$m_lat_own, d$e_lat_hh, d$m_lat_hh),
+    prp("lat_shr", "Latino share of owner households", d$e_lat_own, d$m_lat_own, d$e_own, d$m_own))
+}
+chg_join <- function(m19, m24) inner_join(m19, m24, by = c("unit", "key", "measure", "type"), suffix = c("19", "24")) %>%
+  mutate(chg = est24 - est19, chg_moe = sqrt(moe19^2 + moe24^2), sig = !is.na(chg) & !is.na(chg_moe) & abs(chg) > chg_moe)
+
+# ---- CPA totals: 2010 tracts assigned by the same 50% rule ---------------------
+tracts10_sf <- st_read(params$path_tracts10, quiet = TRUE) %>% st_make_valid() %>% to_ft() %>%
+  mutate(tract_area = as.numeric(st_area(geometry))) %>% select(GEOID10 = GEOID, tract_area)
+xw10 <- suppressWarnings(st_intersection(tracts10_sf, six_sf)) %>% mutate(int_area = as.numeric(st_area(geometry))) %>%
+  st_drop_geometry() %>% mutate(share_in_cpa = int_area / tract_area) %>% filter(share_in_cpa >= 0.5)
+qa_add(5, "Homeownership change: no 2010 tract is assigned to two CPAs", "0", sum(duplicated(xw10$GEOID10)),
+       !any(duplicated(xw10$GEOID10)), stop_if_fail = TRUE)
+miss19 <- setdiff(xw10$GEOID10, t19$GEOID)
+qa_add(5, "Homeownership change: 2010 tracts in the six CPAs missing from the 2015-2019 pull", "0", length(miss19),
+       length(miss19) == 0, stop_if_fail = TRUE)
+c19 <- chg_sum(t19 %>% inner_join(select(xw10, GEOID = GEOID10, cpa), by = "GEOID"), "cpa")
+c24 <- chg_sum(t24 %>% inner_join(select(tract_xwalk, GEOID, cpa), by = "GEOID"), "cpa")
+own_chg_cpa <- chg_join(chg_measures(c19, "cpa"), chg_measures(c24, "cpa")) %>% rename(cpa = unit) %>%
+  left_join(count(xw10, cpa, name = "tracts10"), by = "cpa") %>% left_join(count(tract_xwalk, cpa, name = "tracts20"), by = "cpa")
+chk24 <- own_chg_cpa %>% filter(key == "own") %>%
+  inner_join(acs_long %>% filter(variable == "B25003_002") %>% group_by(cpa) %>% summarise(e = sum(estimate)), by = "cpa")
+qa_add(5, "Homeownership change: 2020-2024 owner households by CPA equal the sum of the crosswalk tracts", "6 CPAs",
+       paste(sum(chk24$est24 == chk24$e), "match"), nrow(chk24) == 6 && all(chk24$est24 == chk24$e), stop_if_fail = TRUE)
+
+# ---- Tract groups: smallest sets of tracts that match in both years ------------
+rel <- read_delim(params$path_tract_rel, delim = "|", col_types = cols(.default = "c"), progress = FALSE) %>%
+  transmute(g20 = GEOID_TRACT_20, g10 = GEOID_TRACT_10, a20 = as.numeric(AREALAND_TRACT_20), a10 = as.numeric(AREALAND_TRACT_10),
+            part = as.numeric(AREALAND_PART)) %>%
+  filter(str_starts(g20, "06037") | str_starts(g10, "06037"), !is.na(g20), !is.na(g10))
+rel_min_share <- 0.05      # a link counts when the shared land is at least 5% of either tract; smaller overlaps are boundary adjustments
+links <- rel %>% filter((a20 > 0 & part / a20 >= rel_min_share) | (a10 > 0 & part / a10 >= rel_min_share))
+comp_label <- function(a, b) {                       # connected components by repeated minimum labelling
+  nodes <- unique(c(a, b)); lab <- setNames(seq_along(nodes), nodes)
+  repeat {
+    m <- pmin(lab[a], lab[b]); mn <- tapply(c(m, m), c(a, b), min)
+    new <- lab; new[names(mn)] <- pmin(new[names(mn)], mn)
+    if (all(new == lab)) break
+    lab <- new
+  }
+  lab
+}
+lab <- comp_label(paste0("n20_", links$g20), paste0("n10_", links$g10))
+grp20 <- tibble(GEOID = sub("^n20_", "", names(lab)[str_starts(names(lab), "n20_")]), grp = unname(lab[str_starts(names(lab), "n20_")]))
+grp10 <- tibble(GEOID = sub("^n10_", "", names(lab)[str_starts(names(lab), "n10_")]), grp = unname(lab[str_starts(names(lab), "n10_")]))
+g19 <- chg_sum(t19 %>% inner_join(grp10, by = "GEOID"), "grp"); g24 <- chg_sum(t24 %>% inner_join(grp20, by = "GEOID"), "grp")
+grp_size <- count(grp20, grp, name = "n20") %>% left_join(count(grp10, grp, name = "n10"), by = "grp")
+own_chg_grp <- chg_join(chg_measures(g19, "grp"), chg_measures(g24, "grp")) %>% rename(grp = unit)
+own_chg_tract <- grp20 %>% left_join(grp_size, by = "grp") %>%            # one row per 2020 tract, with its group's change
+  left_join(own_chg_grp %>% filter(key %in% c("own", "lat_own", "blk_own", "lat_shr", "blk_shr", "lat_rate", "blk_rate")) %>%
+              select(grp, key, est19, est24, chg, chg_moe, sig) %>%
+              pivot_wider(names_from = key, values_from = c(est19, est24, chg, chg_moe, sig)), by = "grp")
+miss_grp <- setdiff(tract_xwalk$GEOID, own_chg_tract$GEOID[!is.na(own_chg_tract$chg_own)])
+qa_add(5, "Homeownership change: every crosswalk tract has a tract group with both periods", "0 missing", length(miss_grp),
+       length(miss_grp) == 0, stop_if_fail = TRUE)
+xg <- own_chg_tract %>% filter(GEOID %in% tract_xwalk$GEOID)
+qa_add(5, "Homeownership change: crosswalk tracts compared one-to-one / as part of a split or merged group", "reported",
+       sprintf("%d / %d", sum(xg$n20 == 1 & xg$n10 == 1), sum(!(xg$n20 == 1 & xg$n10 == 1))), TRUE)
+tot_chk <- c(sum(g24$e_own), sum(t24$e_own[t24$GEOID %in% grp20$GEOID]), sum(g19$e_own), sum(t19$e_own[t19$GEOID %in% grp10$GEOID]))
+qa_add(5, "Homeownership change: owner households summed over tract groups equal the tract sums, both periods",
+       paste(fmt(tot_chk[c(2, 4)]), collapse = " / "), paste(fmt(tot_chk[c(1, 3)]), collapse = " / "),
+       tot_chk[1] == tot_chk[2] && tot_chk[3] == tot_chk[4], stop_if_fail = TRUE)
 ```
 
 ```{r stage5-table}
@@ -1635,8 +1936,15 @@ fill_why <- case_when(c5_sf$class == "Working-class" ~ "#F3D5BF",
                       c5_sf$class == "Insufficient data" ~ "#D9D9D9",
                       TRUE ~ unname(pat_cols[c5_sf$pattern]))
 gid <- function(v) as.list(setNames(v, c5_sf$GEOID))
+# Six income categories of Reardon and Bischoff (2011), on the ratio of tract to area median income
+inc_breaks <- c(0.67, 0.80, 1.00, 1.25, 1.50)
+inc_labs <- c("Poor (under 0.67)", "Low income (0.67 to 0.80)", "Low-middle income (0.80 to 1.00)", "High-middle income (1.00 to 1.25)",
+              "High income (1.25 to 1.50)", "Affluent (1.50 and over)")
+inc_cols <- c("#B2182B", "#EF8A62", "#FDDBC7", "#D1E5F0", "#67A9CF", "#2166AC")
+inc_cat <- function(r) factor(inc_labs[findInterval(r, inc_breaks) + 1], levels = inc_labs)
+inc_col <- function(r) ifelse(is.na(r), "#D9D9D9", inc_cols[findInterval(r, inc_breaks) + 1])
 cols_c5 <- list(rec = gid(wc_pal(c5_sf$class)), ind = gid(wc_pal(c5_sf$class_ind)), hh = gid(wc_pal(c5_sf$class_hh)),
-                chg = gid(unname(chg_cols[c5_sf$change])), why = gid(fill_why))
+                chg = gid(unname(chg_cols[c5_sf$change])), why = gid(fill_why), inc = gid(inc_col(c5_sf$mhi_ratio)))
 few_c5 <- (c5_sf$estimate_pop < 100) %in% TRUE | is.na(c5_sf$estimate_pop)
 alt_hover <- paste0(
   "<br><b>Alt. B. Workers in construction, manufacturing, trade,</b><br><b>&nbsp;&nbsp;&nbsp;&nbsp;transportation, hospitality and other services industries</b><br>",
@@ -1645,6 +1953,7 @@ alt_hover <- paste0(
   "<br><b>Alt. C. Median household income &divide; county median</b><br>",
   ifelse(is.na(c5_sf$mhi), "not published", paste0("$", fmt(c5_sf$mhi), " &divide; $", fmt(county_mhi), " = ", fmt(c5_sf$mhi_ratio, 2))),
   " &middot; needs under 1.00 &middot; ", mark(c5_sf$test_C_hh),
+  ifelse(is.na(c5_sf$mhi_ratio), "", paste0(" &middot; income category: ", as.character(inc_cat(c5_sf$mhi_ratio)))),
   "<br><b>Class by definition</b>: A + B + C: ", c5_sf$class, " &middot; industry B: ", c5_sf$class_ind,
   " &middot; household-income C: ", c5_sf$class_hh)
 bl_ll <- c5_sf %>% filter(class != "Insufficient data", borderline %in% TRUE)
@@ -1665,12 +1974,15 @@ m_c5 <- leaflet_base(height = 660, bm_key = "city") %>% fit_to(city_fit_sf) %>%
   addLegend("bottomright", colors = c("#F3D5BF", unname(pat_cols), "#D9D9D9"),
             labels = c("Working-class", pat_levels, "Insufficient data"), opacity = 0.8,
             title = "Why a tract is not working-class (A + B + C)", className = "info legend leg-why") %>%
+  addLegend("bottomright", colors = c(inc_cols, "#D9D9D9"), labels = c(inc_labs, "Not published"), opacity = 0.8,
+            title = "Tract median household income &divide; county median", className = "info legend leg-inc") %>%
   onRender("
     function(el, x, data) {
       var map = this, nm = el.id;
       var opts = [['rec', 'A + B + C (rule used)'], ['ind', 'Industry in place of occupation (alt. B)'],
                   ['hh', 'Household income against the county median (alt. C)']];
-      var cmp = [['chg', 'Tracts that change class under an alternative'], ['why', 'A + B + C: which tests other tracts fail']];
+      var cmp = [['chg', 'Tracts that change class under an alternative'], ['why', 'A + B + C: which tests other tracts fail'],
+                 ['inc', 'Alt. C income measure in six income categories']];
       var ctrl = L.control({position: 'topright'});
       ctrl.onAdd = function() {
         var div = L.DomUtil.create('div', 'leaflet-bar');
@@ -1691,8 +2003,8 @@ m_c5 <- leaflet_base(height = 660, bm_key = "city") %>% fit_to(city_fit_sf) %>%
           var l = map.layerManager.getLayer('shape', id);
           if (l) l.setStyle({fillColor: cols[id]});
         });
-        var leg = (v === 'chg' || v === 'why') ? v : 'cls';
-        ['cls', 'chg', 'why'].forEach(function(k) {
+        var leg = (v === 'chg' || v === 'why' || v === 'inc') ? v : 'cls';
+        ['cls', 'chg', 'why', 'inc'].forEach(function(k) {
           el.querySelectorAll('.leg-' + k).forEach(function(d) { d.style.display = k === leg ? '' : 'none'; });
         });
         el.querySelector('.wc-n').innerHTML = data.counts[v] || '';
@@ -1722,11 +2034,22 @@ tagList(tags$p(tags$b("Working-class census tracts in Los Angeles under each def
                       "Tracts with at least 50% of their land in the City (", fmt(nrow(city_xwalk)), "), drawn in full and labeled with the CPA holding most of their land. ",
                       "Dashed outline: borderline under the rule (the 90% interval for A or B includes 50%). ",
                       "Black outline: six candidate CPAs; grey lines: other CPAs. ACS 2020–2024 5-year. ", basemap_credit, ".")))
+inc_tab <- tc_city %>% mutate(cat = as.character(inc_cat(mhi_ratio)), cat = factor(coalesce(cat, "Not published"), levels = c(inc_labs, "Not published"))) %>%
+  group_by(`Income category` = cat, .drop = FALSE) %>%
+  summarise(`City tracts` = n(), `Working-class under alt. C` = sum(class_hh == "Working-class"), `Working-class under the rule (A + B + C)` = sum(class == "Working-class"),
+            `Tracts in the six candidate CPAs` = sum(cpa %in% focus_cpas), .groups = "drop")
+qa_add(6, "Income categories: every City tract falls in one category or is not published", nrow(tc_city), sum(inc_tab$`City tracts`),
+       sum(inc_tab$`City tracts`) == nrow(tc_city), stop_if_fail = TRUE)
 def_tab %>%
   tbl(caption = "City census tracts by class under the rule and the two alternatives (census tracts)",
       note = paste0("City tracts: ", fmt(nrow(tc_city)), ". Alt. B replaces the occupation test with the industry measure; alt. C replaces family income against the metro median with household income against the county median ($",
                     fmt(county_mhi), "). No class: under 100 residents, or no published median for the income measure the definition uses."),
       align = c("l", rep("r", 6)))
+inc_tab %>% mutate(Share = pct(`City tracts` / sum(`City tracts`)), .after = `City tracts`) %>% mutate(across(where(is.numeric), fmt)) %>%
+  tbl(caption = "City census tracts by income category: tract median household income ÷ county median (census tracts)",
+      note = paste0("The alt. C income measure, tract median household income ÷ the Los Angeles County median ($", fmt(county_mhi),
+                    "), scored in the six categories of Reardon and Bischoff (2011): poor (ratio under 0.67), low income (0.67 to 0.80), low-middle income (0.80 to 1.00), high-middle income (1.00 to 1.25), high income (1.25 to 1.50) and affluent (1.50 and over). Alt. C counts a tract as passing the income test when the ratio is under 1.00, that is, in the first three categories. Choose \"Alt. C income measure in six income categories\" on the map above to see them."),
+      align = c("l", rep("r", 5)))
 ```
 
 ### Working Class Definition (A+B+C) in Application in Los Angeles
@@ -1820,23 +2143,50 @@ status_levels <- names(pal_status)
 yr_end <- function(y) pmin(as.Date(paste0(y, "-12-31")), data_asof)
 
 # ---- Eligibility flags on the six-CPA parcels ---------------------------------
+# Four tiers (protocol addendum 2.1). A: 4,000 sq ft floor, no screen (new). B: 4,500 sq ft
+# floor, no screen (was A). C: B less hillside-fire lots, except in the two exempt CPAs
+# (was B). D: A less hillside-fire lots everywhere, with no exemption (new).
 prop_sf <- prop_sf %>%
   mutate(is_sf = land_use == "Single-family",
          is_mf = str_starts(land_use, "Multi-family"),
-         sfA = is_sf & lot_sqft >= 4500,            # row 3: eligible single-family, tier A
-         sfB_helper = is_sf & !hillside_fire,       # row 4: computed, not displayed
-         sfB = sfA & sfB_helper,                    # row 5: eligible single-family, tier B
-         mfA = is_mf & lot_sqft >= 4500,            # row 6: eligible multi-family, tier A (same 4,500 sq ft floor)
-         mfB = mfA & !hillside_fire,                # row 7: eligible multi-family, tier B
-         eligA = sfA | mfA, eligB = sfB | mfB)
+         hf_all = in_hill & in_fire,                # in both layers, exempt CPAs included
+         big4 = lot_sqft >= 4000, big45 = lot_sqft >= 4500,
+         sfA = is_sf & big4,  mfA = is_mf & big4,
+         sfB = is_sf & big45, mfB = is_mf & big45,
+         sfC = sfB & !hillside_fire, mfC = mfB & !hillside_fire,
+         sfD = sfA & !hf_all, mfD = mfA & !hf_all,
+         eligA = sfA | mfA, eligB = sfB | mfB, eligC = sfC | mfC, eligD = sfD | mfD)
+tier_def <- tribble(~tier, ~floor, ~screen,
+  "A", "4,000 sq ft", "None",
+  "B", "4,500 sq ft", "None",
+  "C", "4,500 sq ft", "Removes hillside-fire lots, except in Northeast Los Angeles and Silver Lake - Echo Park - Elysian Valley",
+  "D", "4,000 sq ft", "Removes hillside-fire lots everywhere, with no exemption")
+tier_ok <- st_drop_geometry(prop_sf) %>% group_by(cpa) %>%
+  summarise(A = sum(eligA), B = sum(eligB), C = sum(eligC), D = sum(eligD), flagged = sum(eligA & hf_all), .groups = "drop")
+qa_add(7, "Eligibility tiers: A >= B >= C and A >= D in every CPA; D = A where no eligible lot is in both layers", "holds",
+       if (with(tier_ok, all(A >= B & B >= C & A >= D & (flagged > 0 | D == A)))) "holds" else "violated",
+       with(tier_ok, all(A >= B & B >= C & A >= D & (flagged > 0 | D == A))), stop_if_fail = TRUE)
 
 # ---- ADU projects with location, status and screen flags ---------------------
+hf_lookup <- tibble(prop_id = parcel_class$AIN, hf_all = parcel_class$in_hill & parcel_class$in_fire) %>% distinct(prop_id, .keep_all = TRUE)
+# From here on `adu` holds every ADU, whatever its tag: LADBS permitted (2017 to present),
+# older permitted (2010 to 2016) and grandfathered (Assessor record). They are treated alike.
+adu_ladbs <- adu
+adu <- bind_rows(adu %>% mutate(status = as.character(status)), adu_pre %>% mutate(status = as.character(status)), adu_gf)
+qa_add(7, "All ADUs: LADBS permitted + older permitted + grandfathered rows, citywide", fmt(nrow(adu_ladbs) + nrow(adu_pre) + nrow(adu_gf)), fmt(nrow(adu)),
+       nrow(adu) == nrow(adu_ladbs) + nrow(adu_pre) + nrow(adu_gf) && !anyNA(adu$source_tag) && !anyNA(adu$units), stop_if_fail = TRUE)
 adu <- adu %>%
+  left_join(hf_lookup, by = "prop_id") %>%
   mutate(status = factor(as.character(status), levels = status_levels),
-         outside_A_sf = property_type == "Single-family" & !is.na(lot_sqft) & lot_sqft < 4500,   # single-family only: kept for the earlier-run check
-         outside_B_sf = outside_A_sf | coalesce(hillside_fire, FALSE),
-         outside_A = property_type %in% c("Single-family", "Multi-family") & !is.na(lot_sqft) & lot_sqft < 4500,
-         outside_B = outside_A | coalesce(hillside_fire, FALSE))
+         hf_all = coalesce(hf_all, FALSE), is_sfp = property_type == "Single-family",
+         lot_known = property_type %in% c("Single-family", "Multi-family") & !is.na(lot_sqft),
+         outside_B_sf = is_sfp & !is.na(lot_sqft) & lot_sqft < 4500,   # single-family only: kept for the earlier-run check (then tier A)
+         outside_C_sf = outside_B_sf | coalesce(hillside_fire, FALSE),
+         outside_A = lot_known & lot_sqft < 4000,
+         outside_B = lot_known & lot_sqft < 4500,
+         outside_C = outside_B | coalesce(hillside_fire, FALSE),
+         outside_D = outside_A | hf_all)
+adu_v11 <- filter(adu, source_tag == tag_levels[1], source_rule != "work-description wording")   # the earlier set (LADBS, before the wording rule), for the earlier-run checks
 adu_xy <- adu %>%
   mutate(x = pt_x, y = pt_y)
 need_ll <- is.na(adu_xy$x) & !is.na(adu_xy$lat) & adu_xy$lat != 0
@@ -1852,11 +2202,12 @@ adu_focus <- adu %>% filter(cpa %in% focus_cpas)
 land_summary <- function(cc) {
   d <- st_drop_geometry(prop_sf) %>% filter(cpa == cc)
   tibble(cpa = cc, area_sqft = cpa_sf$area_sqft[cpa_sf$cpa == cc],
-         r1 = nrow(d), r2 = sum(d$is_sf), r3 = sum(d$sfA), r4 = sum(d$sfB_helper), r5 = sum(d$sfB),
-         r_mf = sum(d$is_mf), r6 = sum(d$mfA), r6a = sum(d$land_use == "Multi-family, 2-4 units"),
-         r6b = sum(d$land_use == "Multi-family, 5+ units"), r7 = sum(d$mfB),
-         r8 = sum(d$eligA), r9 = sum(d$eligB), older = sum(d$older_adu, na.rm = TRUE)) %>%
-    mutate(r10 = r8 - r9)
+         r1 = nrow(d), r2 = sum(d$is_sf), r_mf = sum(d$is_mf),
+         r6a = sum(d$land_use == "Multi-family, 2-4 units"), r6b = sum(d$land_use == "Multi-family, 5+ units"),
+         sfA = sum(d$sfA), mfA = sum(d$mfA), eA = sum(d$eligA), sfB = sum(d$sfB), mfB = sum(d$mfB), eB = sum(d$eligB),
+         sfC = sum(d$sfC), mfC = sum(d$mfC), eC = sum(d$eligC), sfD = sum(d$sfD), mfD = sum(d$mfD), eD = sum(d$eligD),
+         older = sum(d$older_adu, na.rm = TRUE)) %>%
+    mutate(rmC = eB - eC, rmD = eA - eD)
 }
 adu_summary <- function(d) {
   tibble(projects = nrow(d), units = sum(d$units),
@@ -1864,6 +2215,7 @@ adu_summary <- function(d) {
          in_progress = sum(d$units[d$status == "In progress"]),
          stalled = sum(d$units[d$status == "Stalled"]),
          outside_A = sum(d$units[d$outside_A]), outside_B = sum(d$units[d$outside_B]),
+         outside_C = sum(d$units[d$outside_C]), outside_D = sum(d$units[d$outside_D]),
          properties = n_distinct(d$prop_id[!is.na(d$prop_id)]) + sum(is.na(d$prop_id)),
          prop_sf = n_distinct(d$prop_id[d$property_type == "Single-family"]),
          prop_mf = n_distinct(d$prop_id[d$property_type == "Multi-family" & !is.na(d$prop_id)]) +
@@ -1873,37 +2225,125 @@ adu_summary <- function(d) {
 }
 land_tbl <- map_dfr(focus_cpas, land_summary)
 adu_tbl  <- map_dfr(focus_cpas, function(cc) adu_summary(filter(adu_focus, cpa == cc)) %>% mutate(cpa = cc))
+adu_tbl_sf <- map_dfr(focus_cpas, function(cc) adu_summary(filter(adu_focus, cpa == cc, is_sfp)) %>% mutate(cpa = cc))
+
+# ---- Single-family switch (protocol addendum 2.3 and 3.1) ---------------------------------
+# Tables: both versions are built in R and the page shows one at a time.
+sw_n <- 0
+sf_switch <- function(all_html, sf_html) {
+  sw_n <<- sw_n + 1; id <- paste0("sfsw", sw_n)
+  js <- function(show, hide) sprintf("document.getElementById('%s_%s').style.display='';document.getElementById('%s_%s').style.display='none';", id, show, id, hide)
+  HTML(paste0('<div style="margin: 8px 0 2px 0; font-size: 13px;"><b>Show:</b> ',
+              '<label style="font-weight: normal; margin: 0 12px 0 6px;"><input type="radio" name="', id, '" checked onchange="', js("all", "sf"), '"> All properties</label>',
+              '<label style="font-weight: normal; margin: 0;"><input type="radio" name="', id, '" onchange="', js("sf", "all"), '"> Single-family properties only</label></div>',
+              '<div id="', id, '_all">', paste(as.character(all_html), collapse = "\n"), '</div>',
+              '<div id="', id, '_sf" style="display: none;">', paste(as.character(sf_html), collapse = "\n"), '</div>'))
+}
+# Charts: one of two widgets is shown; the one revealed is resized to its container.
+chart_switch <- function(w_sf, w_mf) {
+  sw_n <<- sw_n + 1; id <- paste0("chsw", sw_n)
+  js <- function(show, hide) sprintf("var s=document.getElementById('%s_%s'),h=document.getElementById('%s_%s');h.style.display='none';s.style.display='';var p=s.querySelector('.plotly');if(p&&window.Plotly){Plotly.Plots.resize(p);}", id, show, id, hide)
+  tagList(HTML(paste0('<div style="margin: 8px 0 2px 0; font-size: 13px;"><b>Show:</b> ',
+                      '<label style="font-weight: normal; margin: 0 12px 0 6px;"><input type="radio" name="', id, '" checked onchange="', js("sf", "mf"), '"> Single-family properties</label>',
+                      '<label style="font-weight: normal; margin: 0;"><input type="radio" name="', id, '" onchange="', js("mf", "sf"), '"> Multi-family properties</label></div>')),
+          tags$div(id = paste0(id, "_sf"), w_sf), tags$div(id = paste0(id, "_mf"), style = "display: none;", w_mf))
+}
+# Maps: a tick box hides projects on other property types. Each listed layer group keeps
+# its layers in the order they were drawn; data.groups[g] gives, per layer, whether it shows
+# with the box off (all) and on (sf). data.labels recounts a group of printed tract labels.
+sf_toggle_js <- "
+  function(el, x, data) {
+    var map = this, stash = {}, labs = null;
+    function arr(v) { return Array.isArray(v) ? v : [v]; }
+    Object.keys(data.groups).forEach(function(g) {
+      var lg = map.layerManager.getLayerGroup(g, false); if (!lg) return;
+      var a = []; lg.eachLayer(function(l) { a.push(l); }); stash[g] = {lg: lg, a: a};
+    });
+    if (data.labels) {
+      var lgl = map.layerManager.getLayerGroup(data.labels.group, false);
+      if (lgl) { labs = []; lgl.eachLayer(function(l) { labs.push(l); }); }
+    }
+    var ctrl = L.control({position: data.position || 'topright'});
+    ctrl.onAdd = function() {
+      var div = L.DomUtil.create('div', 'leaflet-bar');
+      div.style.background = 'white'; div.style.padding = '6px 8px'; div.style.fontSize = '12px';
+      div.innerHTML = '<label style=\"font-weight: normal; margin: 0;\"><input type=\"checkbox\" class=\"sf-only\"> Single-family properties only</label>';
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    };
+    ctrl.addTo(map);
+    function update() {
+      var sf = el.querySelector('.sf-only').checked;
+      Object.keys(stash).forEach(function(g) {
+        var s = stash[g], keep = arr(data.groups[g][sf ? 'sf' : 'all']);
+        s.a.forEach(function(l, i) {
+          if (+keep[i] === 1) { if (!s.lg.hasLayer(l)) s.lg.addLayer(l); } else if (s.lg.hasLayer(l)) s.lg.removeLayer(l);
+        });
+      });
+      if (labs) { var v = arr(data.labels[sf ? 'sf' : 'all']); labs.forEach(function(l, i) { l.setTooltipContent(String(v[i])); }); }
+    }
+    el.querySelector('.sf-only').addEventListener('change', update);
+  }"
 
 ```
 
 # Citywide
 
-The citywide section covers every Community Plan Area. Each project is assigned to the CPA of its parcel (APN, then City PIN, then coordinates), and to the permit's CPA text only when no parcel is found. `r fmt(nrow(adu))` ADU projects adding `r fmt(sum(adu$units))` units were issued from `r window_label`.
+The citywide section covers every Community Plan Area. Each project is assigned to the CPA of its parcel (APN, then City PIN, then coordinates), and to the permit's CPA text only when no parcel is found. The report counts `r fmt(nrow(adu))` ADUs with `r fmt(sum(adu$units))` units: `r fmt(sum(adu$units[adu$source_tag == tag_levels[1]]))` units on LADBS permitted ADUs (`r ladbs_window`), `r fmt(sum(adu$units[adu$source_tag == tag_levels[2]]))` on older permitted ADUs (2010 to 2016) and `r fmt(sum(adu$units[adu$source_tag == tag_levels[3]]))` grandfathered ADUs from the 2026 Assessor roll. Every table, chart and map below counts the three groups together.
 
 ## ADU units by year and status
 
 ```{r c1-yearly}
-c1 <- adu %>%
-  group_by(issue_year) %>%
-  summarise(projects = n(),
-            completed = sum(units[status == "Completed"]),
-            in_progress = sum(units[status == "In progress"]),
-            stalled = sum(units[status == "Stalled"]),
-            units = sum(units), .groups = "drop") %>%   # total last: it would mask the column above
-  mutate(share = completed / units)
-c1_tot <- c1 %>% summarise(across(c(projects, units, completed, in_progress, stalled), sum)) %>%
-  mutate(issue_year = NA, share = completed / units)
-qa_add(7, "Units by year and status: completed + in progress + stalled = units, every year", "all years", "checked",
-       all(c1$completed + c1$in_progress + c1$stalled == c1$units), stop_if_fail = TRUE)
-bind_rows(c1, c1_tot) %>%
-  transmute(`Issue year` = case_when(is.na(issue_year) ~ "Total",
+c1_build <- function(a) {
+  yrs <- a %>% group_by(issue_year) %>%
+    summarise(projects = n(),
+              completed = sum(units[status == "Completed"]),
+              in_progress = sum(units[status == "In progress"]),
+              stalled = sum(units[status == "Stalled"]),
+              units = sum(units), .groups = "drop") %>%   # total last: it would mask the column above
+    mutate(share = completed / units)
+  tot <- yrs %>% summarise(across(c(projects, units, completed, in_progress, stalled), sum)) %>%
+    mutate(issue_year = 9999, share = completed / units)
+  list(yrs = yrs, tot = tot)
+}
+c1_table <- function(b, what) bind_rows(b$yrs, b$tot) %>%
+  transmute(`Issue year` = case_when(issue_year == 9999 ~ "Total", is.na(issue_year) ~ "No permit year (grandfathered)",
                                      issue_year == year(data_asof) ~ paste0(issue_year, " (to ", format(data_asof, "%b %e") %>% str_squish(), ")"),
                                      TRUE ~ as.character(issue_year)),
-            `ADU projects` = fmt(projects), `ADU units` = fmt(units), Completed = fmt(completed),
+            `ADUs (projects)` = fmt(projects), `ADU units` = fmt(units), Completed = fmt(completed),
             `In progress` = fmt(in_progress), Stalled = fmt(stalled), `Share completed` = pct(share)) %>%
-  tbl(caption = "ADU projects and units by issue year, with units by status, citywide (ADU projects; ADU units)",
-      note = paste0("Year of the project's first ADU-flagged permit. Status: completed = CofO, final inspection or CofC anywhere in the permit chain; stalled = no permit status change since ",
-                    format(stall_cutoff, "%B %e, %Y") %>% str_squish(), ". ", window_label, "; ", year(data_asof), " is a partial year."))
+  tbl(caption = paste0("ADUs and ADU units by issue year, with units by status, citywide, ", what, " (ADUs; ADU units)"),
+      note = paste0("Year of the project's first ADU permit: 2010 to 2016 are older permitted ADUs, 2017 on are LADBS permitted ADUs. Grandfathered ADUs come from the Assessor roll, have no permit year and count as completed. Status: completed = CofO, final inspection or CofC anywhere in the permit chain; stalled = no permit status change since ",
+                    format(stall_cutoff, "%B %e, %Y") %>% str_squish(), ". Covers ", window_label, "; ", year(data_asof), " is a partial year."))
+c1_all <- c1_build(adu); c1_sf <- c1_build(filter(adu, is_sfp)); c1 <- c1_all$yrs
+qa_add(7, "Units by year and status: completed + in progress + stalled = units, every year, all properties and single-family only", "all years", "checked",
+       all(c1$completed + c1$in_progress + c1$stalled == c1$units) &&
+         all(with(c1_sf$yrs, completed + in_progress + stalled == units)) && sum(c1_sf$yrs$units) <= sum(c1$units) && sum(c1$units) == sum(adu$units), stop_if_fail = TRUE)
+sf_switch(c1_table(c1_all, "all properties"), c1_table(c1_sf, "single-family properties only"))
+```
+
+## ADU units by property type
+
+```{r c1b-property-type}
+# Shares are shares of ADU units (decision recorded in the protocol addendum, section 2.2).
+pt_levels <- c("Single-family", "Multi-family", "Other or unknown")
+c1b <- adu %>% mutate(pt = factor(if_else(property_type %in% pt_levels[1:2], property_type, pt_levels[3]), levels = pt_levels)) %>%
+  group_by(pt) %>%
+  summarise(properties = n_distinct(prop_id[!is.na(prop_id)]) + sum(is.na(prop_id)), projects = n(),
+            completed = sum(units[status == "Completed"]), units = sum(units), .groups = "drop")
+c1b_tot <- c1b %>% summarise(across(c(properties, projects, completed, units), sum)) %>% mutate(pt = "All properties")
+qa_add(7, "Units by property type: rows sum to the citywide total", fmt(sum(adu$units)), fmt(sum(c1b$units)), sum(c1b$units) == sum(adu$units), stop_if_fail = TRUE)
+bind_rows(c1b %>% mutate(pt = as.character(pt)), c1b_tot) %>%
+  transmute(`Property type` = pt, `ADU units` = fmt(units), `Share of ADU units` = pct(units / sum(adu$units)),
+            `ADU projects` = fmt(projects), `Properties with an ADU` = fmt(properties),
+            `Share of properties` = pct(properties / c1b_tot$properties), `Units completed` = fmt(completed),
+            `Share completed` = pct(completed / units)) %>%
+  tbl(caption = paste0("ADU units by property type, citywide, ", window_label, " (ADU units; ADU projects; properties)"),
+      note = paste0("Shares are shares of ADU units; the share of properties is shown beside them because the two differ (a multi-family property more often adds several units). ",
+                    "Definitions: property type is the parcel's land use class in the 2026 Assessor roll. Single-family = use type SFR. Multi-family = use type R-I (residential income), which is any lot with two or more units, so duplex lots count as multi-family. ",
+                    "Other or unknown = condominium, commercial, vacant or other parcels, parcels with no roll record, and projects placed on no parcel. Grandfathered ADUs are all on single-family parcels. ",
+                    "The class reflects the parcel in 2026, not at the permit date."),
+      align = c("l", rep("r", 7)))
 ```
 
 ## CPA rankings
@@ -1913,16 +2353,6 @@ The first table ranks every CPA in the City on cumulative ADU units; the two tab
 ```{r c2-rankings}
 not_ranked <- c("Port of Los Angeles", "Los Angeles International Airport")
 sf_den <- parcel_class %>% filter(land_use == "Single-family") %>% count(cpa, name = "sf_parcels")
-rank_base <- adu %>%
-  filter(cpa %in% setdiff(cpa_sf$cpa, not_ranked)) %>%
-  count(cpa, issue_year, wt = units, name = "units") %>%
-  complete(cpa = setdiff(cpa_sf$cpa, not_ranked), issue_year = 2017:year(data_asof), fill = list(units = 0))
-n_ranked <- n_distinct(rank_base$cpa)
-annual <- rank_base %>% group_by(issue_year) %>% mutate(rank_n = min_rank(desc(units))) %>% ungroup()
-cumul <- rank_base %>% arrange(issue_year) %>% group_by(cpa) %>% mutate(cum_units = cumsum(units)) %>% ungroup() %>%
-  left_join(sf_den, by = "cpa") %>%
-  mutate(per100 = 100 * cum_units / sf_parcels) %>%
-  group_by(issue_year) %>% mutate(rank_pct = min_rank(desc(per100))) %>% ungroup()
 band_bg <- function(r) case_when(r <= 5 ~ "#1F3864", r <= 10 ~ "#2E75B6", r <= 17 ~ "#BDD7EE", TRUE ~ "#E7E6E6")
 band_fg <- function(r) if_else(r <= 10, "white", "black")
 rank_cells <- function(df, value_fmt, rank_col, val_col) {
@@ -1933,29 +2363,53 @@ rank_cells <- function(df, value_fmt, rank_col, val_col) {
     pivot_wider(names_from = issue_year, values_from = cell) %>%
     arrange(match(cpa, focus_cpas)) %>% rename(CPA = cpa)
 }
-legend_note <- paste0("Cell = rank among ", n_ranked, " CPAs (value). Shading: dark blue = top 5, medium blue = 6-10, light blue = 11-17, grey = 18-", n_ranked,
-                      ". Port of Los Angeles and Los Angeles International Airport are not ranked.")
-standings <- cumul %>% filter(issue_year == year(data_asof)) %>%
-  mutate(rank_units = min_rank(desc(cum_units))) %>% arrange(rank_pct)
-standings %>%
-  transmute(`Rank (per 100 SF parcels)` = rank_pct, CPA = cpa, `ADU units` = fmt(cum_units),
-            `Single-family parcels` = fmt(sf_parcels), `Units per 100 SF parcels` = fmt(per100, 1),
-            `Rank (units)` = rank_units) %>%
-  kable(format = "html", align = c("c", "l", "r", "r", "r", "c"),
-        caption = paste0("Cumulative standings, all CPAs, ", window_label, " (ADU units; parcels)")) %>%
-  kable_styling(bootstrap_options = c("condensed", "striped"), full_width = FALSE) %>%
-  row_spec(which(standings$cpa %in% focus_cpas), bold = TRUE, background = "#FFF2CC") %>%
-  footnote(general = "Six candidate CPAs highlighted. Ranks shift slightly from the earlier report because projects are now placed by parcel location and the stalled cutoff includes exactly three years.",
-           general_title = "Note: ", footnote_as_chunk = TRUE)
-annual %>% filter(cpa %in% focus_cpas) %>% rank_cells(fmt, "rank_n", "units") %>%
-  kable(format = "html", escape = FALSE, caption = "Rank by ADU units permitted each year, six candidate CPAs (ADU units)") %>%
-  kable_styling(bootstrap_options = "condensed", full_width = FALSE) %>%
-  footnote(general = legend_note, general_title = "Note: ", footnote_as_chunk = TRUE)
-cumul %>% filter(cpa %in% focus_cpas) %>% rank_cells(function(v) fmt(v, 1), "rank_pct", "per100") %>%
-  kable(format = "html", escape = FALSE, caption = "Rank by cumulative ADU units per 100 single-family parcels, through each year, six candidate CPAs") %>%
-  kable_styling(bootstrap_options = "condensed", full_width = FALSE) %>%
-  footnote(general = paste(legend_note, "Denominator: parcels typed SFR in the 2026 Assessor roll, assigned to CPAs by interior point. The numerator includes ADUs on multi-family parcels."),
-           general_title = "Note: ", footnote_as_chunk = TRUE)
+# The standings table and both rank tables, for one set of projects (all properties, or
+# single-family properties only). The denominator is single-family parcels in both.
+rank_build <- function(a, what, num_note) {
+  a_rk <- a %>% filter(cpa %in% setdiff(cpa_sf$cpa, not_ranked))
+  early <- a_rk %>% filter(is.na(issue_year) | issue_year < 2017) %>% count(cpa, wt = units, name = "early")   # older permitted and grandfathered
+  rank_base <- a_rk %>% filter(!is.na(issue_year), issue_year >= 2017) %>%
+    count(cpa, issue_year, wt = units, name = "units") %>%
+    complete(cpa = setdiff(cpa_sf$cpa, not_ranked), issue_year = 2017:year(data_asof), fill = list(units = 0))
+  n_ranked <- n_distinct(rank_base$cpa)
+  annual <- rank_base %>% group_by(issue_year) %>% mutate(rank_n = min_rank(desc(units))) %>% ungroup()
+  cumul <- rank_base %>% arrange(issue_year) %>% left_join(early, by = "cpa") %>%
+    group_by(cpa) %>% mutate(cum_units = cumsum(units) + coalesce(early, 0)) %>% ungroup() %>%
+    left_join(sf_den, by = "cpa") %>%
+    mutate(per100 = 100 * cum_units / sf_parcels) %>%
+    group_by(issue_year) %>% mutate(rank_pct = min_rank(desc(per100))) %>% ungroup()
+  legend_note <- paste0("Annual ranks cover ADUs permitted in each year from 2017 on; cumulative counts start from the ADUs with an earlier permit year or none (older permitted and grandfathered). Cell = rank among ", n_ranked, " CPAs (value). Shading: dark blue = top 5, medium blue = 6-10, light blue = 11-17, grey = 18-", n_ranked,
+                        ". Port of Los Angeles and Los Angeles International Airport are not ranked.")
+  standings <- cumul %>% filter(issue_year == year(data_asof)) %>%
+    mutate(rank_units = min_rank(desc(cum_units))) %>% arrange(rank_pct)
+  t1 <- standings %>%
+    transmute(`Rank (per 100 SF parcels)` = rank_pct, CPA = cpa, `ADU units` = fmt(cum_units),
+              `Single-family parcels` = fmt(sf_parcels), `Units per 100 SF parcels` = fmt(per100, 1),
+              `Rank (units)` = rank_units) %>%
+    kable(format = "html", align = c("c", "l", "r", "r", "r", "c"),
+          caption = paste0("Cumulative standings, all CPAs, ", what, ", ", window_label, " (ADU units; parcels)")) %>%
+    kable_styling(bootstrap_options = c("condensed", "striped"), full_width = FALSE) %>%
+    row_spec(which(standings$cpa %in% focus_cpas), bold = TRUE, background = "#FFF2CC") %>%
+    footnote(general = paste("Six candidate CPAs highlighted.", num_note), general_title = "Note: ", footnote_as_chunk = TRUE)
+  t2 <- annual %>% filter(cpa %in% focus_cpas) %>% rank_cells(fmt, "rank_n", "units") %>%
+    kable(format = "html", escape = FALSE, caption = paste0("Rank by ADU units permitted each year, six candidate CPAs, ", what, " (ADU units)")) %>%
+    kable_styling(bootstrap_options = "condensed", full_width = FALSE) %>%
+    footnote(general = legend_note, general_title = "Note: ", footnote_as_chunk = TRUE)
+  t3 <- cumul %>% filter(cpa %in% focus_cpas) %>% rank_cells(function(v) fmt(v, 1), "rank_pct", "per100") %>%
+    kable(format = "html", escape = FALSE, caption = paste0("Rank by cumulative ADU units per 100 single-family parcels, through each year, six candidate CPAs, ", what)) %>%
+    kable_styling(bootstrap_options = "condensed", full_width = FALSE) %>%
+    footnote(general = paste(legend_note, "Denominator: parcels typed SFR in the 2026 Assessor roll, assigned to CPAs by interior point.", num_note),
+             general_title = "Note: ", footnote_as_chunk = TRUE)
+  list(standings = standings, n_ranked = n_ranked, html = paste(as.character(t1), as.character(t2), as.character(t3), sep = "\n"))
+}
+rk_all <- rank_build(adu, "all properties", "The numerator includes ADUs on multi-family parcels.")
+rk_sf  <- rank_build(filter(adu, is_sfp), "single-family properties only",
+                     "The numerator counts ADU units on single-family properties only, so both sides of the ratio count the same kind of lot.")
+standings <- rk_all$standings; n_ranked <- rk_all$n_ranked
+qa_add(7, "CPA rankings: single-family units do not exceed all units in any CPA", paste(n_ranked, "CPAs"),
+       paste(sum(rk_sf$standings$cum_units[match(standings$cpa, rk_sf$standings$cpa)] <= standings$cum_units), "hold"),
+       all(rk_sf$standings$cum_units[match(standings$cpa, rk_sf$standings$cpa)] <= standings$cum_units), stop_if_fail = TRUE)
+sf_switch(rk_all$html, rk_sf$html)
 ```
 
 ## ADU units by CPA, mapped
@@ -1965,15 +2419,19 @@ Counts follow CPA size, so the map also offers two relative measures: each CPA's
 ```{r c3-prep}
 cpa_map_sf <- cpa_sf %>% filter(!cpa %in% not_ranked)
 cum_by_cpa <- adu %>% filter(cpa %in% cpa_map_sf$cpa) %>% group_by(cpa) %>%
-  summarise(all_u = sum(units), comp_u = sum(units[status == "Completed"]), .groups = "drop")
-cpa_join <- cpa_map_sf %>% left_join(cum_by_cpa, by = "cpa") %>% mutate(across(c(all_u, comp_u), ~ replace_na(.x, 0)))
+  summarise(all_u = sum(units), comp_u = sum(units[status == "Completed"]),
+            all_s = sum(units[is_sfp]), comp_s = sum(units[is_sfp & status == "Completed"]), .groups = "drop")
+cpa_join <- cpa_map_sf %>% left_join(cum_by_cpa, by = "cpa") %>% mutate(across(c(all_u, comp_u, all_s, comp_s), ~ replace_na(.x, 0)))
 ```
 
 ```{r c3-shares}
 city_units <- sum(adu$units); city_comp <- sum(adu$units[adu$status == "Completed"])
+city_units_s <- sum(adu$units[adu$is_sfp]); city_comp_s <- sum(adu$units[adu$is_sfp & adu$status == "Completed"])
 c3s <- cpa_join %>% left_join(sf_den, by = "cpa") %>%
   mutate(sh_all = all_u / city_units, sh_comp = comp_u / city_comp,
          p100_all = 100 * all_u / sf_parcels, p100_comp = 100 * comp_u / sf_parcels,
+         sh_all_s = all_s / city_units_s, sh_comp_s = comp_s / city_comp_s,          # single-family versions
+         p100_all_s = 100 * all_s / sf_parcels, p100_comp_s = 100 * comp_s / sf_parcels,
          done = ifelse(all_u > 0, comp_u / all_u, NA_real_))
 chk_p100 <- c3s %>% st_drop_geometry() %>% select(cpa, p100_all) %>%
   inner_join(select(standings, cpa, per100), by = "cpa")
@@ -1993,17 +2451,30 @@ brk_100 <- nice_brks(c(c3s$p100_all, c3s$p100_comp), 1)
 pal_sh <- colorBin("Blues", domain = range(brk_sh), bins = brk_sh, na.color = "#D9D9D9")
 pal_100 <- colorBin("Purples", domain = range(brk_100), bins = brk_100, na.color = "#D9D9D9")
 c3_ll <- c3s %>% st_simplify(preserveTopology = TRUE, dTolerance = 50) %>% to_ll(digits = 5)
-cols_c3 <- list(n_all = setNames(pal_n(c3_ll$all_u), c3_ll$cpa), n_comp = setNames(pal_n(c3_ll$comp_u), c3_ll$cpa),
-                sh_all = setNames(pal_sh(c3_ll$sh_all), c3_ll$cpa), sh_comp = setNames(pal_sh(c3_ll$sh_comp), c3_ll$cpa),
-                p100_all = setNames(pal_100(c3_ll$p100_all), c3_ll$cpa), p100_comp = setNames(pal_100(c3_ll$p100_comp), c3_ll$cpa))
+nmc <- function(v) as.list(setNames(v, c3_ll$cpa))       # bins are shared by every status and by the single-family versions
+c3_sel <- list(all = status_levels, comp = "Completed", prog = "In progress", stal = "Stalled")
+c3_base <- adu %>% filter(cpa %in% cpa_map_sf$cpa)
+cols_c3 <- list(); c3_sum <- 0
+for (u in names(c3_sel)) for (pt in c("", "_s")) {
+  dsel <- c3_base %>% filter(status %in% c3_sel[[u]], pt == "" | is_sfp) %>% count(cpa, wt = units, name = "v")
+  v <- coalesce(dsel$v[match(c3_ll$cpa, dsel$cpa)], 0)
+  tot <- sum(adu$units[adu$status %in% c3_sel[[u]] & (pt == "" | adu$is_sfp)])
+  if (pt == "" && u != "all") c3_sum <- c3_sum + sum(v)
+  cols_c3[[paste0("n_", u, pt)]] <- nmc(pal_n(v))
+  cols_c3[[paste0("sh_", u, pt)]] <- nmc(pal_sh(pmin(v / max(tot, 1), max(brk_sh))))
+  cols_c3[[paste0("p100_", u, pt)]] <- nmc(pal_100(100 * v / c3_ll$sf_parcels))
+}
+qa_add(7, "CPA units map: completed + in progress + stalled layers sum to all units on the map", fmt(sum(c3_ll$all_u)), fmt(c3_sum), c3_sum == sum(c3_ll$all_u), stop_if_fail = TRUE)
 rk <- function(x) min_rank(desc(x))
 lab_c3 <- sprintf(paste0("<b>%s</b><br>ADU units: %s, %s of the City's (rank %d of %d)<br>",
                          "Completed units: %s, %s of the City's completed (rank %d)<br>",
                          "Share of its own units completed: %s<br>",
-                         "Units per 100 single-family parcels: %s all, %s completed (rank %d)<br>Single-family parcels: %s"),
+                         "Units per 100 single-family parcels: %s all, %s completed (rank %d)<br>Single-family parcels: %s<br>",
+                         "<i>On single-family properties only:</i> %s units (%s completed), %s of the City's; %s per 100 single-family parcels (rank %d)"),
                   c3_ll$cpa, fmt(c3_ll$all_u), pct(c3_ll$sh_all), rk(c3_ll$sh_all), nrow(c3_ll),
                   fmt(c3_ll$comp_u), pct(c3_ll$sh_comp), rk(c3_ll$sh_comp), pct(c3_ll$done),
-                  fmt(c3_ll$p100_all, 1), fmt(c3_ll$p100_comp, 1), rk(c3_ll$p100_all), fmt(c3_ll$sf_parcels))
+                  fmt(c3_ll$p100_all, 1), fmt(c3_ll$p100_comp, 1), rk(c3_ll$p100_all), fmt(c3_ll$sf_parcels),
+                  fmt(c3_ll$all_s), fmt(c3_ll$comp_s), pct(c3_ll$sh_all_s), fmt(c3_ll$p100_all_s, 1), rk(c3_ll$p100_all_s))
 pct_fmt <- labelFormat(suffix = "%", transform = function(x) round(100 * x, 1))
 m_c3 <- leaflet_base(height = 620, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
   addPolygons(data = c3_ll, layerId = ~cpa, fillColor = unname(cols_c3$n_all), fillOpacity = 0.75,
@@ -2023,9 +2494,14 @@ m_c3 <- leaflet_base(height = 620, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
       ctrl.onAdd = function() {
         var div = L.DomUtil.create('div', 'leaflet-bar');
         div.style.background = 'white'; div.style.padding = '6px 8px'; div.style.fontSize = '12px';
-        div.innerHTML = '<b>Units</b><br>' +
+        div.innerHTML = '<b>Properties</b><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_p\" value=\"\" checked> All properties</label><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_p\" value=\"_s\"> Single-family only</label><br>' +
+          '<b>Units</b><br>' +
           '<label><input type=\"radio\" name=\"' + nm + '_u\" value=\"all\" checked> All ADU units</label><br>' +
-          '<label><input type=\"radio\" name=\"' + nm + '_u\" value=\"comp\"> Completed ADU units</label><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_u\" value=\"comp\"> Completed</label><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_u\" value=\"prog\"> In progress</label><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_u\" value=\"stal\"> Stalled</label><br>' +
           '<b>Measure</b><br>' +
           '<label><input type=\"radio\" name=\"' + nm + '_m\" value=\"n\" checked> Counts of ADU units</label><br>' +
           '<label><input type=\"radio\" name=\"' + nm + '_m\" value=\"sh\"> Share of the City&#39;s units</label><br>' +
@@ -2037,7 +2513,8 @@ m_c3 <- leaflet_base(height = 620, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
       function update() {
         var u = el.querySelector('input[name=\"' + nm + '_u\"]:checked').value;
         var ms = el.querySelector('input[name=\"' + nm + '_m\"]:checked').value;
-        var cols = data.cols[ms + '_' + u];
+        var pt = el.querySelector('input[name=\"' + nm + '_p\"]:checked').value;
+        var cols = data.cols[ms + '_' + u + pt];
         Object.keys(cols).forEach(function(id) {
           var l = map.layerManager.getLayer('shape', id);
           if (l) l.setStyle({fillColor: cols[id]});
@@ -2051,12 +2528,17 @@ m_c3 <- leaflet_base(height = 620, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
     }", data = list(cols = cols_c3))
 qa_add(7, "CPA units map: unit counts on the map sum to the mapped CPAs' units", fmt(sum(cum_by_cpa$all_u)), fmt(sum(c3s$all_u)),
        sum(c3s$all_u) == sum(cum_by_cpa$all_u) && sum(c3s$comp_u) == sum(cum_by_cpa$comp_u), stop_if_fail = TRUE)
+chk_p100s <- c3s %>% st_drop_geometry() %>% select(cpa, p100_all_s) %>% inner_join(select(rk_sf$standings, cpa, per100), by = "cpa")
+qa_add(7, "CPA units map: single-family units per 100 single-family parcels match the single-family standings, every CPA",
+       paste(nrow(c3s), "CPAs"), paste(sum(abs(chk_p100s$p100_all_s - chk_p100s$per100) < 1e-9), "match"),
+       nrow(chk_p100s) == nrow(c3s) && all(abs(chk_p100s$p100_all_s - chk_p100s$per100) < 1e-9) && all(c3s$all_s <= c3s$all_u), stop_if_fail = TRUE)
 tagList(tags$p(tags$b(paste0("ADU units by Community Plan Area, ", window_label))),
         m_c3,
         tags$p(style = "font-size: 12px;",
                paste0("Use the controls to switch between all and completed units, and between three measures: counts of ADU units, each CPA's share of the City's units, and units per 100 single-family parcels. Six candidate CPAs outlined in black; hover for every measure and rank. ",
                       "Shares are of all ", fmt(city_units), " ADU units (", fmt(city_comp), " completed) permitted citywide; Port of Los Angeles and Los Angeles International Airport are not mapped. ",
                       "Per 100 single-family parcels uses the same denominator as the CPA rankings: parcels typed SFR in the 2026 Assessor roll, assigned by interior point; the numerator includes ADUs on multi-family parcels. ",
+                      "The Units control filters by status: all units, completed, in progress or stalled. Counts for every status share one set of color bins, so for in-progress and stalled units the share of the City's units shows the pattern more clearly. Choose \"Single-family only\" to count ADU units on single-family properties alone: the counts, the shares (of the City's ", fmt(city_units_s), " single-family ADU units; ", fmt(city_comp_s), " completed) and the per-100 measure each switch, on the same color bins. ",
                       "Completed = CofO, final inspection or CofC in the permit chain. Shared bins for all and completed units within each measure. ", basemap_credit, ".")))
 ```
 
@@ -2064,11 +2546,12 @@ tagList(tags$p(tags$b(paste0("ADU units by Community Plan Area, ", window_label)
 
 ```{r c4-year-slider}
 # One point per project, drawn by issue year with a slider (cumulative or single year).
-c4_years <- 2017:year(data_asof)
-p4 <- adu_pts %>% filter(cpa %in% cpa_sf$cpa, issue_year %in% c4_years) %>% st_transform(crs_web)
+c4_years <- 2010:year(data_asof)
+p4 <- adu_pts %>% filter(cpa %in% cpa_sf$cpa, issue_year %in% c4_years | is.na(issue_year)) %>% st_transform(crs_web)
 xy4 <- st_coordinates(p4)
 c4_data <- list(lat = round(xy4[, 2], 5), lng = round(xy4[, 1], 5),
-                yr = as.integer(p4$issue_year - min(c4_years)), st = as.integer(p4$status) - 1L, u = as.numeric(p4$units),
+                yr = coalesce(as.integer(p4$issue_year - min(c4_years)), -1L), st = as.integer(p4$status) - 1L, u = as.numeric(p4$units),
+                sf = as.integer(p4$is_sfp),
                 years = c4_years, cols = unname(pal_status), stat = names(pal_status),
                 last_label = paste0(year(data_asof), " (to ", str_squish(format(data_asof, "%b %e")), ")"))
 n_nopt <- nrow(adu) - nrow(p4)
@@ -2102,10 +2585,11 @@ m_c4 <- leaflet_base(height = 640, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
   onRender("
     function(el, x, data) {
       var map = this, nm = el.id, n = data.lat.length, yrs = data.years, last = yrs.length - 1;
-      var groups = yrs.map(function() { return L.layerGroup(); });
+      var G = {};      // one layer group per issue year (-1 = no permit year), property type and status
+      function grp(j, sf, st) { var key = j + '|' + sf + '|' + st; if (!G[key]) G[key] = {j: j, sf: sf, st: st, lg: L.layerGroup()}; return G[key].lg; }
       for (var i = 0; i < n; i++) {
         L.circleMarker([data.lat[i], data.lng[i]], {radius: 1.7, stroke: false, fillColor: data.cols[data.st[i]],
-                                                    fillOpacity: 0.75, interactive: false}).addTo(groups[data.yr[i]]);
+                                                    fillOpacity: 0.75, interactive: false}).addTo(grp(data.yr[i], data.sf[i], data.st[i]));
       }
       var ctrl = L.control({position: 'topright'});
       ctrl.onAdd = function() {
@@ -2115,6 +2599,8 @@ m_c4 <- leaflet_base(height = 640, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
           '<input type=\"range\" class=\"c4-slider\" min=\"0\" max=\"' + last + '\" value=\"' + last + '\" step=\"1\" style=\"width: 100%;\">' +
           '<label><input type=\"radio\" name=\"' + nm + '_mode\" value=\"cum\" checked> Through this year (cumulative)</label><br>' +
           '<label><input type=\"radio\" name=\"' + nm + '_mode\" value=\"one\"> Issued in this year only</label><br>' +
+          '<label><input type=\"checkbox\" class=\"c4-sf\"> Single-family properties only</label><br>' +
+          '<b>Status</b> ' + data.stat.map(function(t, q) { return '<label style=\"margin-right: 6px;\"><input type=\"checkbox\" class=\"c4-st c4-st' + q + '\" checked> <span style=\"color:' + data.cols[q] + '\">&#9679;</span> ' + t + '</label>'; }).join('') + '<br>' +
           '<button type=\"button\" class=\"c4-play\" style=\"margin: 4px 0;\">&#9654; Play</button>' +
           '<div class=\"c4-count\" style=\"margin-top: 2px;\"></div>';
         L.DomEvent.disableClickPropagation(div); L.DomEvent.disableScrollPropagation(div);
@@ -2126,18 +2612,18 @@ m_c4 <- leaflet_base(height = 640, bm_key = "city") %>% fit_to(cpa_map_sf) %>%
       function update() {
         var k = +slider.value;
         var cum = el.querySelector('input[name=\"' + nm + '_mode\"]:checked').value === 'cum';
-        groups.forEach(function(g, j) {
-          var on = cum ? j <= k : j === k;
-          if (on) { if (!map.hasLayer(g)) map.addLayer(g); } else if (map.hasLayer(g)) map.removeLayer(g);
-        });
+        var sfOnly = el.querySelector('.c4-sf').checked;
+        var stOn = data.stat.map(function(t, q) { return el.querySelector('.c4-st' + q).checked; });
+        function show(g, on) { if (on) { if (!map.hasLayer(g)) map.addLayer(g); } else if (map.hasLayer(g)) map.removeLayer(g); }
+        Object.keys(G).forEach(function(key) { var g = G[key]; show(g.lg, (cum ? g.j <= k : g.j === k) && (!sfOnly || g.sf) && stOn[g.st]); });
         var p = 0, u = 0, s = [0, 0, 0];
         for (var i = 0; i < n; i++) {
           var j = data.yr[i];
-          if (cum ? j <= k : j === k) { p++; u += data.u[i]; s[data.st[i]] += data.u[i]; }
+          if ((cum ? j <= k : j === k) && (!sfOnly || data.sf[i]) && stOn[data.st[i]]) { p++; u += data.u[i]; s[data.st[i]] += data.u[i]; }
         }
         var lab = k === last ? data.last_label : String(yrs[k]);
-        el.querySelector('.c4-yr').textContent = (cum ? '2017 through ' : '') + lab;
-        el.querySelector('.c4-count').innerHTML = num(p) + ' projects, ' + num(u) + ' ADU units<br>' +
+        el.querySelector('.c4-yr').textContent = (cum ? 'Through ' : '') + lab;
+        el.querySelector('.c4-count').innerHTML = num(p) + ' ADUs, ' + num(u) + ' ADU units<br>' +
           data.stat.map(function(t, q) { return t + ': ' + num(s[q]); }).join(' &middot; ');
       }
       function stop() { if (timer) { clearInterval(timer); timer = null; el.querySelector('.c4-play').innerHTML = '&#9654; Play'; } }
@@ -2161,6 +2647,7 @@ tagList(tags$p(tags$b(paste0("ADU projects in Los Angeles by issue year, ", wind
                paste0("Drag the slider or press Play to watch ADU projects accumulate by the year their first ADU permit was issued; switch to \"Issued in this year only\" to see one year at a time. ",
                       "One dot per project at its parcel (", fmt(nrow(p4)), " projects; ", fmt(n_nopt), " more could not be placed on the map and are not drawn). ",
                       "Color is the project's status as of ", fmt_date(data_asof), ", not its status in the year shown; the counts in the control are ADU units by that status. ",
+                      "Tick \"Single-family properties only\" to hide projects on every other property type, and untick a status to hide it; the counts follow. The slider runs from 2010: 2010 to 2016 are older permitted ADUs. Grandfathered ADUs have no permit year, so they appear in every cumulative view and in no single-year view. ",
                       "Grey lines: CPAs (hover for the name); black outline: six candidate CPAs. ",
                       "Tick \"Working-class tracts (A + B + C)\" at top left to shade every City tract by its class under the rule used in this analysis (working-class, other, or insufficient data) beneath the dots. ",
                       basemap_credit, ".")))
@@ -2175,11 +2662,13 @@ dated_long <- function(d) {
   yrs <- 2017:year(data_asof)
   map_dfr(yrs, function(Y) {
     e <- yr_end(Y)
-    inc <- d %>% filter(submitted <= e)
+    inc <- d %>% filter(is.na(submitted) | submitted <= e)          # grandfathered ADUs have no dates: counted as completed from the first bar
+    done <- is.na(inc$submitted) | (!is.na(inc$completion_dt) & inc$completion_dt <= e)
+    sy <- year(inc$submitted)
     tibble(year = Y,
-           Completed = sum(inc$units[!is.na(inc$completion_dt) & inc$completion_dt <= e]),
-           New = sum(inc$units[(is.na(inc$completion_dt) | inc$completion_dt > e) & year(inc$submitted) == Y]),
-           Ongoing = sum(inc$units[(is.na(inc$completion_dt) | inc$completion_dt > e) & year(inc$submitted) < Y]))
+           Completed = sum(inc$units[done]),
+           New = sum(inc$units[!done & sy == Y]),
+           Ongoing = sum(inc$units[!done & sy < Y]))
   })
 }
 dated_chart <- function(d, title) {
@@ -2358,7 +2847,8 @@ d3_table <- function(res, caption, note) {
                              "Shading in the working-class columns marks shares and averages where working-class tracts differ from the other tracts in the same pair by more than the 90% margin of error of the difference: green = working-class tracts are higher, yellow = lower. Counts are not shaded, because they follow the number of tracts in each group."),
              general_title = "Note: ", footnote_as_chunk = TRUE, threeparttable = TRUE)
 }
-d4_build <- function(tc, adu_d, prop_d) {
+d4_build <- function(tc, adu_d, prop_d, sf_only = FALSE) {   # sf_only: single-family units over single-family eligible lots
+  if (sf_only) { adu_d <- filter(adu_d, property_type == "Single-family"); prop_d <- mutate(prop_d, eligB = sfB, eligC = sfC) }
   g <- wc_groups(tc)
   map_dfr(grp_levels, function(gname) {
     ct <- g$CT20[g$grp == gname]
@@ -2366,23 +2856,24 @@ d4_build <- function(tc, adu_d, prop_d) {
     tibble(group = gname, tracts = length(ct), units = sum(a$units),
            completed = sum(a$units[a$status == "Completed"]), in_progress = sum(a$units[a$status == "In progress"]),
            stalled = sum(a$units[a$status == "Stalled"]),
-           eligA = sum(pr$eligA), eligB = sum(pr$eligB), sf = sum(pr$is_sf),
+           eligB = sum(pr$eligB), eligC = sum(pr$eligC), sf = sum(pr$is_sf),
            properties = n_distinct(a$prop_id))
   }) %>%
-    mutate(per100A = 100 * units / eligA, per100B = 100 * units / eligB, per100sf = 100 * units / sf,
+    mutate(per100B = 100 * units / eligB, per100C = 100 * units / eligC, per100sf = 100 * units / sf,
            share_completed = completed / units)
 }
-d4_table <- function(d4) {
+d4_table <- function(d4, sf_only = FALSE) {
+  el <- if (sf_only) "single-family eligible lots" else "eligible lots"; un <- if (sf_only) "Single-family ADU units" else "ADU units"
   f <- function(x, d = 0) ifelse(is.finite(x), fmt(x, d), "n/a")
   p <- function(x) ifelse(is.finite(x), pct(x), "n/a")
-  tibble(Measure = c("Census tracts", "ADU units", "Completed", "In progress", "Stalled",
-                     "ADU units per 100 eligible lots, tier A", "ADU units per 100 eligible lots, tier B",
-                     "ADU units per 100 single-family lots", "Properties with ADUs", "Share of units completed")) %>%
+  tibble(Measure = c("Census tracts", un, "Completed", "In progress", "Stalled",
+                     paste0(un, " per 100 ", el, ", tier B"), paste0(un, " per 100 ", el, ", tier C"),
+                     paste0(un, " per 100 single-family lots"), "Properties with ADUs", "Share of units completed")) %>%
     bind_cols(map_dfc(seq_len(nrow(d4)), function(i) {
       r <- d4[i, ]
       v <- if (r$tracts == 0) rep("no tracts", 10) else
         c(fmt(r$tracts), fmt(r$units), fmt(r$completed), fmt(r$in_progress), fmt(r$stalled),
-          f(r$per100A, 1), f(r$per100B, 1), f(r$per100sf, 1), fmt(r$properties), p(r$share_completed))
+          f(r$per100B, 1), f(r$per100C, 1), f(r$per100sf, 1), fmt(r$properties), p(r$share_completed))
       setNames(tibble(v), r$group)
     }))
 }
@@ -2407,7 +2898,24 @@ d2_tract <- rate_cols("B25038_002", "B25038_001", "own") %>%
   left_join(rate_cols("B25003B_002", "B25003B_001", "blk"), by = "GEOID") %>%
   left_join(rate_cols("B25003I_002", "B25003I_001", "lat"), by = "GEOID") %>%
   left_join(tract_class %>% select(GEOID, class_lab = class, borderline, share_no_ba, moe_ba, share_occ, moe_occ,
-                                   mfi, mfi_ratio, test_A, test_B, test_C, estimate_pop), by = "GEOID")
+                                   mfi, mfi_ratio, test_A, test_B, test_C, estimate_pop,
+                                   mhi, mhi_ratio, insufficient_hh, wc_hh), by = "GEOID") %>%
+  # Income overlay and the county-median working-class option (protocol addendum 3.2 and 3.3)
+  left_join(acs_long %>% filter(variable %in% c("B19113_001", "B19013_001")) %>% select(GEOID, variable, moe) %>%
+              pivot_wider(names_from = variable, values_from = moe) %>% transmute(GEOID, mfi_moe = B19113_001, mhi_moe = B19013_001), by = "GEOID") %>%
+  mutate(class_hh = factor(case_when(insufficient_hh ~ "Insufficient data", wc_hh %in% TRUE ~ "Working-class", TRUE ~ "Other"), levels = names(wc_cols)),
+         mfi_ratio_moe = mfi_moe / metro_mfi, mhi_ratio_moe = mhi_moe / county_mhi,      # the reference median is held fixed
+         mfi_cross = !is.na(mfi_ratio) & !is.na(mfi_ratio_moe) & abs(mfi_ratio - 1) <= mfi_ratio_moe,
+         mhi_cross = !is.na(mhi_ratio) & !is.na(mhi_ratio_moe) & abs(mhi_ratio - 1) <= mhi_ratio_moe) %>%
+  # Homeownership change, 2015-2019 to 2020-2024, for the tract's group (protocol addendum 3.4)
+  left_join(own_chg_tract %>% select(GEOID, chg_n20 = n20, chg_n10 = n10, matches("_(lat_own|blk_own|lat_shr|blk_shr|lat_rate|blk_rate)$")), by = "GEOID")
+chg_cols <- c("#8C510A", "#D8B365", "#F6E8C3", "#C7EAE5", "#5AB4AC", "#01665E")      # loss (brown) to gain (green)
+chg_n_breaks <- c(-100, -25, 0, 25, 100); chg_n_labs <- c("Loss of 100 or more", "Loss of 25 to 99", "Loss under 25", "Gain under 25", "Gain of 25 to 99", "Gain of 100 or more")
+chg_s_breaks <- c(-0.10, -0.05, 0, 0.05, 0.10); chg_s_labs <- c("Down 10 points or more", "Down 5 to 10 points", "Down under 5 points", "Up under 5 points", "Up 5 to 10 points", "Up 10 points or more")
+chg_col <- function(v, sig, breaks) ifelse(is.na(v), "#FFFFFF", ifelse(!(sig %in% TRUE), "#D9D9D9", chg_cols[findInterval(v, breaks) + 1]))
+qa_add(7, "Tract map data: every crosswalk tract has homeownership-change values and an income-overlay record", nrow(tract_xwalk),
+       sum(d2_tract$GEOID %in% tract_xwalk$GEOID & !is.na(d2_tract$chg_lat_own)), 
+       all(tract_xwalk$GEOID %in% d2_tract$GEOID[!is.na(d2_tract$chg_lat_own)]), stop_if_fail = TRUE)
 d2_domain <- map(c(own = "own", blk = "blk", lat = "lat"), function(v) {
   x <- d2_tract[[paste0(v, "_est")]][!d2_tract[[paste0(v, "_grey")]]]
   range(x, na.rm = TRUE)
@@ -2440,14 +2948,32 @@ lay_legends <- list(
   own = lay_rate_leg("own", "Homeownership rate", grey = FALSE), lat = lay_rate_leg("lat", "Latino homeownership rate"),
   blk = lay_rate_leg("blk", "Black homeownership rate"),
   hil = lay_hi_leg("Latino"), hib = lay_hi_leg("Black"),
-  wc = paste0("<b>Tract class</b>", paste(lay_sw(wc_cols, names(wc_cols)), collapse = "")), none = "")
+  wc = paste0("<b>Tract class</b>", paste(lay_sw(wc_cols, names(wc_cols)), collapse = "")),
+  wch = paste0("<b>Tract class, county-median option</b><br><span style='font-size:11px'>Test C uses household income against the county median</span>",
+               paste(lay_sw(wc_cols, names(wc_cols)), collapse = "")),
+  incm = paste0("<b>Tract median family income &divide; metro median ($", fmt(metro_mfi), ")</b>", paste(lay_sw(inc_cols, inc_labs), collapse = ""),
+                lay_sw("#D9D9D9", "Not published"), "<span style='font-size:11px'>Dashed outline: 90% range crosses 1.00</span>"),
+  inch = paste0("<b>Tract median household income &divide; county median ($", fmt(county_mhi), ")</b>", paste(lay_sw(inc_cols, inc_labs), collapse = ""),
+                lay_sw("#D9D9D9", "Not published"), "<span style='font-size:11px'>Dashed outline: 90% range crosses 1.00</span>"),
+  dlo = paste0("<b>Change in Latino owner households</b><br><span style='font-size:11px'>2015&ndash;2019 to 2020&ndash;2024</span>", paste(lay_sw(chg_cols, chg_n_labs), collapse = ""), lay_sw("#D9D9D9", "Within the margin of error")),
+  dbo = paste0("<b>Change in Black owner households</b><br><span style='font-size:11px'>2015&ndash;2019 to 2020&ndash;2024</span>", paste(lay_sw(chg_cols, chg_n_labs), collapse = ""), lay_sw("#D9D9D9", "Within the margin of error")),
+  dls = paste0("<b>Change in the Latino share of owners</b><br><span style='font-size:11px'>Percentage points, 2015&ndash;2019 to 2020&ndash;2024</span>", paste(lay_sw(chg_cols, chg_s_labs), collapse = ""), lay_sw("#D9D9D9", "Within the margin of error"), lay_sw("#FFFFFF", "No owner households in a period")),
+  dlr = paste0("<b>Change in the Latino homeownership rate</b><br><span style='font-size:11px'>Percentage points, 2015&ndash;2019 to 2020&ndash;2024; colored = larger than the margin of error</span>", paste(lay_sw(chg_cols, chg_s_labs), collapse = ""), lay_sw("#D9D9D9", "Within the margin of error"), lay_sw("#FFFFFF", "No Latino households in a period")),
+  dbr = paste0("<b>Change in the Black homeownership rate</b><br><span style='font-size:11px'>Percentage points, 2015&ndash;2019 to 2020&ndash;2024; colored = larger than the margin of error</span>", paste(lay_sw(chg_cols, chg_s_labs), collapse = ""), lay_sw("#D9D9D9", "Within the margin of error"), lay_sw("#FFFFFF", "No Black households in a period")),
+  dbs = paste0("<b>Change in the Black share of owners</b><br><span style='font-size:11px'>Percentage points, 2015&ndash;2019 to 2020&ndash;2024</span>", paste(lay_sw(chg_cols, chg_s_labs), collapse = ""), lay_sw("#D9D9D9", "Within the margin of error"), lay_sw("#FFFFFF", "No owner households in a period")),
+  none = "")
 lay_js <- "
   function(el, x, data) {
     var map = this;
     var layers = [['latn', 'Latino owner households (count)'], ['blkn', 'Black owner households (count)'],
                   ['own', 'Homeownership rate'], ['lat', 'Latino homeownership rate'], ['blk', 'Black homeownership rate'],
                   ['hil', 'Overall and Latino homeownership 50%+'], ['hib', 'Overall and Black homeownership 50%+'],
-                  ['wc', 'Working-class tracts'], ['none', 'No shading (outlines only)']];
+                  ['wc', 'Working-class tracts'], ['wch', 'Working-class tracts, county-median option'],
+                  ['incm', 'Family income vs metro median'], ['inch', 'Household income vs county median'],
+                  ['dlr', 'Change in Latino homeownership rate (significant changes)'], ['dbr', 'Change in Black homeownership rate (significant changes)'],
+                  ['dlo', 'Change in Latino owner households'], ['dbo', 'Change in Black owner households'],
+                  ['dls', 'Change in Latino share of owners'], ['dbs', 'Change in Black share of owners'],
+                  ['none', 'No shading (outlines only)']];
     var ctrl = L.control({position: 'topright'});
     ctrl.onAdd = function() {
       var div = L.DomUtil.create('div', 'leaflet-bar');
@@ -2464,13 +2990,43 @@ lay_js <- "
     leg.addTo(map);
     function update() {
       var ly = el.querySelector('select.ly').value;
-      var c = data.cols[ly];
-      Object.keys(c).forEach(function(id) { var l = map.layerManager.getLayer('shape', id); if (l) l.setStyle({fillColor: c[id], fillOpacity: ly === 'none' ? 0.02 : 0.72}); });
+      var c = data.cols[ly], dz = (data.dash || {})[ly] || {};      // dz: tracts drawn with a dashed outline in this layer
+      Object.keys(c).forEach(function(id) {
+        var l = map.layerManager.getLayer('shape', id);
+        if (l) l.setStyle({fillColor: c[id], fillOpacity: ly === 'none' ? 0.02 : 0.72, dashArray: dz[id] ? '6,4' : null,
+                           weight: dz[id] ? 2.4 : 0.7, color: dz[id] ? '#111111' : '#555555'});
+      });
       leg.getContainer().innerHTML = data.legends[ly]; leg.getContainer().style.display = data.legends[ly] ? '' : 'none';
     }
     el.querySelector('select.ly').addEventListener('change', update);
     update();
   }"
+
+# ---- Homeownership change table (protocol addendum 3.4) ---------------------------
+own_chg_note <- paste("Tables B25003, B25003B (Black alone) and B25003I (Hispanic or Latino). Share of the group who own = the group's owner households ÷ the group's households; group share of owners = the group's owner households ÷ all owner households.",
+                      "Change = 2020–2024 less 2015–2019; shares change in percentage points. The margin of a change is the square root of the two periods' squared margins, after the Census formula for a derived proportion in each period.",
+                      "* = the change is larger than its 90% margin of error; other changes are within it and should be read as no measurable change. The two periods do not overlap.")
+own_chg_table <- function(d, caption, note) {
+  ord <- c("hh", "own", "own_rate", "blk_hh", "blk_own", "blk_rate", "blk_shr", "lat_hh", "lat_own", "lat_rate", "lat_shr")
+  d <- d %>% arrange(match(key, ord))
+  fe <- function(t, e) ifelse(is.na(e), "n/a", ifelse(t == "count", fmt(e), paste0(fmt(100 * e, 1), "%")))
+  fm <- function(t, m) ifelse(is.na(m), "n/a", ifelse(t == "count", paste0("± ", fmt(m)), paste0("± ", fmt(100 * m, 1))))
+  fc <- function(t, c, s) ifelse(is.na(c), "n/a", paste0(ifelse(c > 0, "+", ""), ifelse(t == "count", fmt(c), paste0(fmt(100 * c, 1), " pts")), ifelse(s, "*", "")))
+  k <- d %>% transmute(Measure = measure, `2015–2019` = fe(type, est19), MOE = fm(type, moe19), `2020–2024` = fe(type, est24),
+                       `MOE ` = fm(type, moe24), Change = fc(type, chg, sig), `MOE of change` = fm(type, chg_moe)) %>%
+    kable(format = "html", caption = caption, align = c("l", rep("r", 6))) %>%
+    kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE) %>%
+    pack_rows("All households", 1, 3) %>% pack_rows("Black households", 4, 7) %>% pack_rows("Latino households", 8, 11) %>%
+    row_spec(which(d$sig), bold = TRUE) %>%
+    footnote(general = note, general_title = "Note: ", footnote_as_chunk = TRUE, threeparttable = TRUE)
+  k
+}
+# Middle tract on single-family ADU units, pooled across the six CPAs (protocol addendum 2.4)
+sf_units_tract <- adu_focus %>% filter(is_sfp, tract_cpa == cpa) %>% count(ct20, wt = units, name = "units_sf")
+pooled_cut_sf <- median(coalesce(sf_units_tract$units_sf[match(tract_xwalk$CT20, sf_units_tract$ct20)], 0))
+qa_add(7, "Single-family ADU units by tract: units in crosswalk tracts do not exceed all single-family units in the six CPAs",
+       fmt(sum(adu_focus$units[adu_focus$is_sfp])), fmt(sum(sf_units_tract$units_sf)),
+       sum(sf_units_tract$units_sf) <= sum(adu_focus$units[adu_focus$is_sfp]), stop_if_fail = TRUE)
 
 store <- list()   # per-CPA results reused by the selection section
 ```
@@ -2500,7 +3056,7 @@ a1_exp <- tribble(~cpa, ~c, ~i, ~s,
 old_by_text <- old_out %>% group_by(cpa) %>%
   summarise(c = sum(units[status == "Completed"]), i = sum(units[status == "In progress"]), s = sum(units[status == "Stalled"]))
 for (k in seq_len(nrow(a1_exp))) {
-  e <- a1_exp[k, ]; d <- adu %>% filter(cpa_text == e$cpa)
+  e <- a1_exp[k, ]; d <- adu_v11 %>% filter(cpa_text == e$cpa)
   o <- c(sum(d$units[d$status == "Completed"]), sum(d$units[d$status == "In progress"]), sum(d$units[d$status == "Stalled"]))
   ob <- old_by_text[old_by_text$cpa == e$cpa, ]
   cut_u <- sum(d$units[!d$completed & d$last_activity %in% stall_cutoff])
@@ -2514,9 +3070,9 @@ tier_exp <- tribble(~cpa, ~oa, ~ob, ~sf, ~mf,
   "South Los Angeles", 177, 177, 1927, 1351, "Southeast Los Angeles", 177, 177, 1162, 970,
   "Northeast Los Angeles", 186, 186, 2084, 794, "Boyle Heights", 37, 37, 209, 260)
 for (k in seq_len(nrow(tier_exp))) {
-  e <- tier_exp[k, ]; d <- adu %>% filter(cpa == e$cpa); dA <- d %>% filter(join_step == "1. APN")
-  o <- c(sum(d$units[d$outside_A_sf]), sum(d$units[d$outside_B_sf])); oA <- c(sum(dA$units[dA$outside_A_sf]), sum(dA$units[dA$outside_B_sf]))
-  qa_add(7, paste0("Earlier run: ADU units outside tier A / tier B, single-family lots only, ", e$cpa), paste(fmt(c(e$oa, e$ob)), collapse = " / "),
+  e <- tier_exp[k, ]; d <- adu_v11 %>% filter(cpa == e$cpa); dA <- d %>% filter(join_step == "1. APN")
+  o <- c(sum(d$units[d$outside_B_sf]), sum(d$units[d$outside_C_sf])); oA <- c(sum(dA$units[dA$outside_B_sf]), sum(dA$units[dA$outside_C_sf]))
+  qa_add(7, paste0("Earlier run: ADU units outside tier B / tier C (then tiers A / B), single-family lots only, before the wording rule, ", e$cpa), paste(fmt(c(e$oa, e$ob)), collapse = " / "),
          paste(fmt(o), collapse = " / "), all(o == c(e$oa, e$ob)),
          reason = if (all(oA == c(e$oa, e$ob))) "The target used the APN step only; restricted to APN-matched projects this build reproduces it. The PIN and coordinate steps add the rest." else NA_character_)
   t <- c(sum(d$units[d$property_type == "Single-family"]), sum(d$units[d$property_type == "Multi-family"]))
@@ -2531,26 +3087,27 @@ for (k in seq_len(nrow(tier_exp))) {
 
 This section sets out the four choices that shape the analysis, in the order they build on each other, and then the six candidates side by side. Each table below reflects the choices made above it: use the controls to change a choice and every table after it updates.
 
-**The CPA sections earlier in the report use the first option of each control.**
+**The CPA sections earlier in the report use the option each control opens on: the first option of controls 1, 2 and 4, and tier B (the 4,500 sq ft floor) for control 3.** Tier A, the 4,000 sq ft floor, is listed first because it is the widest; it does not become the working definition until the team adopts it.
 
 ```{r stage8-decision-data}
 # =============================================================================
 # STAGE 8. DECISION POINTS
-# Every combination of the four choices (2 x 2 x 2 x 3 = 24) is computed here in
+# Every combination of the four choices (2 x 2 x 4 x 3 = 48) is computed here in
 # R; the page only shows or hides the finished tables. Nothing is computed in
-# the browser. The first option of each choice reproduces the CPA sections.
+# the browser. The option each control opens on (dp_default) reproduces the CPA sections.
 # =============================================================================
 dp_opts <- list(
-  t1 = c(permit = "Permitted ADUs only", older = "Permitted plus older or unpermitted ADUs"),
+  t1 = c(all = "All ADUs: LADBS permitted, older permitted and grandfathered", ladbs = "LADBS permitted ADUs only (2017 to present)"),
   t2 = c(sfmf = "Single-family and multi-family", sf = "Single-family only"),
-  t3 = c(A = "Tier A", B = "Tier B"),
+  t3 = c(A = "Tier A: 4,000 sq ft +", B = "Tier B: 4,500 sq ft +", C = "Tier C: B less hillside-fire lots", D = "Tier D: A less hillside-fire lots, no exemption"),
   t4 = c(occ = "A + B + C (occupation)", ind = "Industry in place of occupation", hh = "Household income against the county median"))
+dp_default <- c(t1 = "all", t2 = "sfmf", t3 = "B", t4 = "occ")
+tiers <- names(dp_opts$t3)
 pr <- st_drop_geometry(prop_sf) %>%
-  mutate(in_tract = !is.na(tract_cpa) & tract_cpa == cpa, big = lot_sqft >= 4500, older = older_adu %in% TRUE)
+  mutate(in_tract = !is.na(tract_cpa) & tract_cpa == cpa, older = older_adu %in% TRUE)
 ad <- adu_focus %>%
-  mutate(in_tract = !is.na(tract_cpa) & tract_cpa == cpa, big = !is.na(lot_sqft) & lot_sqft >= 4500,
-         hf = coalesce(hillside_fire, FALSE), status = as.character(status))
-stopifnot(all(pr$is_sf[pr$older]))                      # older or unpermitted ADUs sit on single-family parcels only
+  mutate(in_tract = !is.na(tract_cpa) & tract_cpa == cpa, status = as.character(status))
+stopifnot(all(pr$is_sf[pr$older]))                      # Grandfathered ADUs sit on single-family parcels only
 # Tract class under each working-class rule
 tc_rules <- tract_class %>%
   transmute(CT20, cpa,
@@ -2559,22 +3116,21 @@ tc_rules <- tract_class %>%
             hh  = case_when(insufficient_hh ~ NA, TRUE ~ wc_hh))
 # Building blocks
 lots_in  <- function(d, t2) d$is_sf | (t2 == "sfmf" & d$is_mf)
-elig_in  <- function(d, t2, t3) lots_in(d, t2) & d$big & (t3 == "A" | !d$hillside_fire)
+tier_in  <- function(d, t3) switch(t3, A = d$big4, B = d$big45, C = d$big45 & !d$hillside_fire, D = d$big4 & !d$hf_all)   # lot passes the tier
+elig_in  <- function(d, t2, t3) lots_in(d, t2) & tier_in(d, t3)
 adu_in_u <- function(a, t2) if (t2 == "sf") a$property_type == "Single-family" else rep(TRUE, nrow(a))
 out_tier <- function(a, t2, t3) {          # units on lots the tier leaves out
-  small <- a$property_type %in% (if (t2 == "sf") "Single-family" else c("Single-family", "Multi-family")) & !is.na(a$lot_sqft) & !a$big
-  if (t3 == "A") small else small | (a$hf & (t2 == "sfmf" | a$property_type == "Single-family"))
+  o <- a[[paste0("outside_", t3)]]
+  if (t2 == "sf") o & a$property_type == "Single-family" else o
 }
 # One CPA (or tract subset) under one set of choices
 dp_counts <- function(p, a, t1, t2, t3) {
-  u <- adu_in_u(a, t2); o <- if (t1 == "older") p$older else rep(FALSE, nrow(p))
-  n_old <- sum(o)
-  comp <- sum(a$units[u & a$status == "Completed"]) + n_old
+  u <- adu_in_u(a, t2) & (t1 == "all" | a$source_tag == tag_levels[1])      # every ADU row carries its tag
   tibble(lots = sum(lots_in(p, t2)), sf_lots = sum(p$is_sf), elig = sum(elig_in(p, t2, t3)),
-         units = sum(a$units[u]) + n_old, completed = comp,
+         units = sum(a$units[u]), completed = sum(a$units[u & a$status == "Completed"]),
          in_progress = sum(a$units[u & a$status == "In progress"]), stalled = sum(a$units[u & a$status == "Stalled"]),
-         older = n_old,
-         outside = sum(a$units[u & out_tier(a, t2, t3)]) + sum(o & !(p$big & (t3 == "A" | !p$hillside_fire))))
+         older = sum(a$units[u & a$source_tag == tag_levels[3]]),
+         outside = sum(a$units[u & out_tier(a, t2, t3)]))
 }
 dp_wc <- function(cc, t1, t2, t3, t4) {     # working-class split for one CPA (cc = NULL pools all six)
   p <- pr %>% filter(in_tract); a <- ad %>% filter(in_tract); tc <- tc_rules
@@ -2591,17 +3147,24 @@ cpa_counts <- function(cc, t1, t2, t3) dp_counts(filter(pr, cpa == cc), filter(a
 
 # ---- Checks: the first option of every choice reproduces the CPA sections -----
 for (cc in focus_cpas) {
-  d <- cpa_counts(cc, "permit", "sfmf", "A"); dB <- cpa_counts(cc, "permit", "sfmf", "B")
+  dd <- lapply(setNames(tiers, tiers), function(tt) cpa_counts(cc, "all", "sfmf", tt)); d <- dd$B
   l <- land_tbl[land_tbl$cpa == cc, ]; a <- adu_tbl[adu_tbl$cpa == cc, ]
-  ok <- d$elig == l$r8 && dB$elig == l$r9 && d$units == a$units && d$completed == a$completed &&
-    d$in_progress == a$in_progress && d$stalled == a$stalled && d$outside == a$outside_A && dB$outside == a$outside_B
-  qa_add(8, paste0("Decision points, default choices reproduce the CPA land use summary and ADU units by status (eligible lots, units, statuses, units outside tiers), ", cc),
+  ok <- all(sapply(tiers, function(tt) dd[[tt]]$elig == l[[paste0("e", tt)]] && dd[[tt]]$outside == a[[paste0("outside_", tt)]])) &&
+    d$units == a$units && d$completed == a$completed && d$in_progress == a$in_progress && d$stalled == a$stalled
+  qa_add(8, paste0("Decision points, default choices reproduce the CPA land use summary and ADU units by status (eligible lots and units outside each of the four tiers, units, statuses), ", cc),
          "equal", if (ok) "equal" else "differs", ok, stop_if_fail = TRUE)
-  w <- dp_wc(cc, "permit", "sfmf", "A", "occ")
+  wS <- dp_wc(cc, "all", "sf", "B", "occ")       # single-family units over single-family eligible lots (addendum 2.4)
+  gS <- d4_build(filter(tract_class, cpa == cc), filter(adu_focus, cpa == cc, tract_cpa %in% cc),
+                 st_drop_geometry(prop_sf) %>% filter(cpa == cc, tract_cpa %in% cc), sf_only = TRUE)
+  gS <- gS[gS$group == "Working-class, all tracts", ]
+  qa_add(8, paste0("Decision points, single-family only reproduces the CPA single-family table of ADUs in working-class tracts (units, units per 100 single-family eligible lots), ", cc),
+         "equal", if (wS$wc_units == gS$units && isTRUE(all.equal(wS$wc_per100, gS$per100B))) "equal" else "differs",
+         wS$wc_units == gS$units && isTRUE(all.equal(wS$wc_per100, gS$per100B)), stop_if_fail = TRUE)
+  w <- dp_wc(cc, "all", "sfmf", "B", "occ")
   d4c <- d4_build(filter(tract_class, cpa == cc), filter(adu_focus, cpa == cc, tract_cpa %in% cc),
                   st_drop_geometry(prop_sf) %>% filter(cpa == cc, tract_cpa %in% cc))
   g <- d4c[d4c$group == "Working-class, all tracts", ]
-  ok <- w$wc_tracts == store[[cc]]$n_wc && w$wc_units == g$units && isTRUE(all.equal(w$wc_per100, g$per100A)) &&
+  ok <- w$wc_tracts == store[[cc]]$n_wc && w$wc_units == g$units && isTRUE(all.equal(w$wc_per100, g$per100B)) &&
     isTRUE(all.equal(w$wc_share, store[[cc]]$wc_units_share))
   qa_add(8, paste0("Decision points, default choices reproduce the CPA table of ADUs in working-class and other tracts (working-class tracts, units, units per 100 eligible lots), ", cc),
          "equal", if (ok) "equal" else "differs", ok, stop_if_fail = TRUE)
@@ -2609,20 +3172,22 @@ for (cc in focus_cpas) {
 grid <- expand.grid(t1 = names(dp_opts$t1), t2 = names(dp_opts$t2), t3 = names(dp_opts$t3), cc = focus_cpas, stringsAsFactors = FALSE)
 all_states <- pmap_dfr(grid, function(t1, t2, t3, cc) cpa_counts(cc, t1, t2, t3) %>% mutate(t1 = t1, t2 = t2, t3 = t3, cpa = cc))
 wide <- all_states %>% select(cpa, t1, t2, t3, elig, units, lots) %>% pivot_wider(names_from = c(t1, t2, t3), values_from = c(elig, units, lots))
-ok_order <- with(wide, all(elig_permit_sfmf_B <= elig_permit_sfmf_A) && all(elig_permit_sf_A <= elig_permit_sfmf_A) &&
-                   all(units_permit_sf_A <= units_permit_sfmf_A) && all(units_older_sfmf_A >= units_permit_sfmf_A) &&
-                   all(lots_permit_sf_A <= lots_permit_sfmf_A))
-qa_add(8, "Decision points: tier B <= tier A, single-family only <= single-family and multi-family, with older ADUs >= without, every CPA",
+ok_order <- with(wide, all(elig_all_sfmf_B <= elig_all_sfmf_A) && all(elig_all_sfmf_C <= elig_all_sfmf_B) &&
+                   all(elig_all_sfmf_D <= elig_all_sfmf_A) && all(elig_all_sf_A <= elig_all_sfmf_A) &&
+                   all(units_all_sf_A <= units_all_sfmf_A) && all(units_all_sfmf_A >= units_ladbs_sfmf_A) &&
+                   all(lots_all_sf_A <= lots_all_sfmf_A))
+qa_add(8, "Decision points: tier C <= tier B <= tier A, tier D <= tier A, single-family only <= single-family and multi-family, all ADUs >= LADBS permitted only, every CPA",
        "holds", if (ok_order) "holds" else "violated", ok_order, stop_if_fail = TRUE)
 qa_add(8, "Decision points: every state adds up (completed + in progress + stalled = units)", "all states",
        paste(sum(with(all_states, completed + in_progress + stalled == units)), "of", nrow(all_states)),
        all(with(all_states, completed + in_progress + stalled == units)), stop_if_fail = TRUE)
 
-# ---- Older or unpermitted ADUs: what the permit record shows -------------------
+# ---- Grandfathered ADUs: what the permit record shows -------------------
 # Cached in data/derived; rebuilt from the two LADBS files when missing or on refresh.
 f_older_hist <- file.path(dir_derived, "older_adu_permit_history.csv")
 older_ains <- parcel_class %>% filter(older_adu %in% TRUE) %>% select(AIN, cpa)
-if (params$refresh || !file.exists(f_older_hist)) {
+older_cached <- if (file.exists(f_older_hist)) read_csv(f_older_hist, col_types = cols(.default = "c"))$AIN else character(0)
+if (params$refresh || !setequal(older_cached, older_ains$AIN)) {     # rebuilt when the set of Assessor-only parcels changes
   rd <- function(p) read_csv(p, col_select = c("APN", "USE_DESC", "ISSUE_DATE", "COFO_DATE", "ADU_CHANGED", "JUNIOR_ADU", "STATUS_DESC", "WORK_DESC"),
                              col_types = cols(.default = col_character()), progress = FALSE)
   h <- bind_rows(rd(params$path_permits_2010s), rd(params$path_permits_2020s)) %>%
@@ -2643,7 +3208,7 @@ if (params$refresh || !file.exists(f_older_hist)) {
   rm(h, hist); invisible(gc())
 }
 older_hist <- read_csv(f_older_hist, col_types = cols(AIN = "c", cpa = "c", history = "c", done_adu = "l"))
-qa_add(8, "Older or unpermitted ADUs: permit history covers every such parcel", fmt(nrow(older_ains)), fmt(nrow(older_hist)),
+qa_add(8, "Grandfathered ADUs: permit history covers every such parcel", fmt(nrow(older_ains)), fmt(nrow(older_hist)),
        setequal(older_hist$AIN, older_ains$AIN), stop_if_fail = TRUE)
 c6 <- parcel_class %>% filter(adu_code6)
 c6_proj <- adu %>% filter(prop_id %in% c6$AIN) %>% group_by(prop_id) %>% summarise(done = any(status == "Completed"), .groups = "drop")
@@ -2662,7 +3227,7 @@ dp_html <- function(df, caption, note = NULL, align = NULL, header = NULL, bold_
 dp_view <- function(html, ...) {            # wrap one finished table with the choices it belongs to
   st <- list(...)
   attrs <- paste(sprintf('data-%s="%s"', names(st), unlist(st)), collapse = " ")
-  first <- all(mapply(function(k, v) v == names(dp_opts[[k]])[1], names(st), unlist(st)))
+  first <- all(mapply(function(k, v) v == dp_default[[k]], names(st), unlist(st)))
   cat(sprintf('<div class="dp-view" %s%s>\n%s\n</div>\n', attrs, if (first) "" else ' style="display: none;"', html))
 }
 dp_state_line <- function(keys) cat(sprintf('<p style="font-size: 13px;"><b>Choices applied here:</b> <span class="dp-state" data-keys="%s"></span></p>\n', paste(keys, collapse = ",")))
@@ -2673,7 +3238,7 @@ short <- unname(short_cpa[focus_cpas])
 grp <- function(k, title) paste0(
   '<div style="display: inline-block; vertical-align: top; margin: 0 18px 4px 0;"><b>', title, '</b><br>',
   paste(sprintf('<label style="font-weight: normal; margin: 0;"><input type="radio" name="dp_%s" value="%s"%s> %s</label>',
-                k, names(dp_opts[[k]]), c(" checked", rep("", length(dp_opts[[k]]) - 1)), dp_opts[[k]]), collapse = "<br>"),
+                k, names(dp_opts[[k]]), ifelse(names(dp_opts[[k]]) == dp_default[[k]], " checked", ""), dp_opts[[k]]), collapse = "<br>"),
   '</div>')
 cat('<div id="dp-controls" style="position: sticky; top: 0; z-index: 500; background: #F4F6F8; border: 1px solid #C9D1D9; border-radius: 4px; padding: 8px 12px; margin: 10px 0 16px 0; font-size: 13px;">',
     grp("t1", "1. ADUs counted"), grp("t2", "2. Parcels considered"), grp("t3", "3. Eligibility"), grp("t4", "4. Working-class rule"),
@@ -2682,21 +3247,23 @@ cat('<div id="dp-controls" style="position: sticky; top: 0; z-index: 500; backgr
 
 ## 1. What counts as an ADU
 
-The permit record is the report's count of ADUs. The Assessor's roll adds a second source: it records an ADU on `r fmt(sum(pr$older))` single-family parcels in the six CPAs (`r fmt(nrow(older_ains))` citywide) that hold no permitted ADU project from `r window_label`. The choice is whether to count those older or unpermitted ADUs with the permitted ones.
+The report counts three groups of ADUs together: LADBS permitted ADUs from 2017 to the present, older permitted ADUs from 2010 to 2016, and grandfathered ADUs that the Assessor's 2026 roll records on single-family parcels with no permit found (`r fmt(sum(pr$older))` in the six CPAs, `r fmt(nrow(older_ains))` citywide). The table of ADUs by tag under [ADU identification](#adu-identification) shows each group in each CPA. This control sets the second and third groups aside, to show how much they move the figures.
 
-If they are counted, each is treated as one **completed** unit. The roll records improvements that exist, and where both sources cover a parcel they agree: of the `r fmt(nrow(c6_proj))` Assessor-coded parcels citywide that do hold a permitted project, `r pct(mean(c6_proj$done))` have a completed one. The remaining `r fmt(sum(!c6_proj$done))` hold projects the permit record shows as stalled or in progress, which suggests some ADUs are built and assessed without a final sign-off. A permit status exists for only some of the older or unpermitted ADUs: the second table shows what the City's permit files hold for each parcel.
+A grandfathered ADU counts as one **completed** unit. The roll records improvements that exist, and where both sources cover a parcel they agree: of the `r fmt(nrow(c6_proj))` Assessor-coded parcels citywide that do hold a permitted project, `r pct(mean(c6_proj$done))` have a completed one. The remaining `r fmt(sum(!c6_proj$done))` hold projects the permit record shows as stalled or in progress, which suggests some ADUs are built and assessed without a final sign-off. The second table shows what the City's permit files hold for each grandfathered parcel.
 
 ```{r dp-part1, results='asis'}
-p1 <- map_dfr(focus_cpas, function(cc) { d <- cpa_counts(cc, "permit", "sfmf", "A"); o <- cpa_counts(cc, "older", "sfmf", "A")
+p1 <- map_dfr(focus_cpas, function(cc) { d <- cpa_counts(cc, "ladbs", "sfmf", "B"); o <- cpa_counts(cc, "all", "sfmf", "B"); a <- filter(ad, cpa == cc)
   tibble(CPA = cc, units = d$units, completed = d$completed, in_progress = d$in_progress, stalled = d$stalled,
-         older = o$older, total = o$units, completed_with = o$completed) })
+         older_permit = sum(a$units[a$source_tag == tag_levels[2]]), older = o$older, total = o$units, completed_with = o$completed) })
 p1 <- bind_rows(p1, p1 %>% summarise(across(-CPA, sum)) %>% mutate(CPA = "All six CPAs"))
-cat(dp_html(p1 %>% transmute(CPA, `Permitted ADU units` = fmt(units), Completed = fmt(completed), `In progress` = fmt(in_progress),
-                             Stalled = fmt(stalled), `Older or unpermitted ADUs` = fmt(older), `Total if counted` = fmt(total),
-                             Increase = pct(older / units), `Completed if counted` = fmt(completed_with)),
-            caption = "Decision 1. Permitted ADU units and older or unpermitted ADUs, six candidate CPAs (ADU units)",
-            note = paste0("Permitted units: ", window_label, ", all property types. Older or unpermitted ADUs: single-family parcels whose Assessor use code records an ADU (fourth character 6) and that hold no permitted ADU project; one unit each, counted as completed. The roll lags construction and does not say whether a unit was permitted."),
-            align = c("l", rep("r", 8)), bold_rows = nrow(p1)))
+qa_add(8, "Decision 1: LADBS permitted + older permitted + grandfathered = all ADU units, six CPAs", fmt(sum(adu_focus$units)),
+       fmt(p1$total[7]), p1$total[7] == sum(adu_focus$units) && all(p1$units + p1$older_permit + p1$older == p1$total), stop_if_fail = TRUE)
+cat(dp_html(p1 %>% transmute(CPA, `LADBS permitted ADU units` = fmt(units), Completed = fmt(completed), `In progress` = fmt(in_progress),
+                             Stalled = fmt(stalled), `Older permitted ADU units` = fmt(older_permit), `Grandfathered ADUs` = fmt(older), `All ADU units` = fmt(total),
+                             `Added by the two other groups` = pct((total - units) / units), `Completed, all ADUs` = fmt(completed_with)),
+            caption = "Decision 1. ADU units by group, six candidate CPAs (ADU units)",
+            note = paste0("LADBS permitted: ", ladbs_window, ", all property types. Older permitted: first ADU permit issued 2010 to 2016. Grandfathered: single-family parcels whose Assessor use code records an ADU (fourth character 6) and that hold no permitted ADU; one completed unit each. This table does not change with the controls."),
+            align = c("l", rep("r", 9)), bold_rows = nrow(p1)))
 h6 <- older_hist %>% filter(cpa %in% focus_cpas) %>% mutate(history = factor(history, levels = hist_levels))
 ph <- bind_rows(h6 %>% count(cpa, history, .drop = FALSE) %>% mutate(cpa = as.character(cpa)),
                 h6 %>% count(history, .drop = FALSE) %>% mutate(cpa = "All six CPAs"),
@@ -2707,9 +3274,9 @@ done_n <- c(map_int(focus_cpas, ~ sum(older_hist$done_adu[older_hist$cpa == .x])
             sum(older_hist$done_adu[older_hist$cpa %in% focus_cpas]), sum(older_hist$done_adu))
 ph <- ph %>% mutate(Parcels = rowSums(across(all_of(hist_levels))), `of which an ADU permit shows completion` = done_n) %>%
   select(CPA = cpa, Parcels, all_of(hist_levels), `of which an ADU permit shows completion`)
-qa_add(8, "Decision 1: permit-history rows sum to the older or unpermitted ADU count, six CPAs", fmt(sum(pr$older)),
+qa_add(8, "Decision 1: permit-history rows sum to the Grandfathered ADU count, six CPAs", fmt(sum(pr$older)),
        fmt(ph$Parcels[ph$CPA == "All six CPAs"]), ph$Parcels[ph$CPA == "All six CPAs"] == sum(pr$older), stop_if_fail = TRUE)
-cat(dp_html(ph, caption = "Older or unpermitted ADUs: what the City's permit files hold for the parcel (parcels)",
+cat(dp_html(ph, caption = "Grandfathered ADUs: what the City's permit files hold for the parcel (parcels)",
             note = "Permits matched to the parcel by APN in the two LADBS datasets (2010 to 2026). ADU-tagged permit, not counted as a project: the parcel has a permit with an ADU tag or ADU use type, but the project netted to zero units, was dropped as not active, or was placed on another parcel. Permit text names an ADU or second unit: no tag, so the identification steps do not pick it up; many predate 2017. Last column: an ADU-tagged or ADU-named permit on the parcel has a certificate of occupancy, final inspection or certificate of completion.",
             align = c("l", rep("r", 6)), bold_rows = c(nrow(ph) - 1, nrow(ph))))
 ```
@@ -2722,7 +3289,7 @@ The choice is whether the analysis covers ADUs on single-family lots only, or on
 dp_state_line("t1")
 for (t1 in names(dp_opts$t1)) {
   p2 <- map_dfr(focus_cpas, function(cc) {
-    p <- filter(pr, cpa == cc); a <- filter(ad, cpa == cc); n_old <- if (t1 == "older") sum(p$older) else 0
+    p <- filter(pr, cpa == cc); a <- filter(ad, cpa == cc, t1 == "all" | source_tag == tag_levels[1]); n_old <- 0
     tibble(CPA = cc, sf_lots = sum(p$is_sf), mf_lots = sum(p$is_mf),
            sf_with = n_distinct(a$prop_id[a$property_type == "Single-family"]) + n_old,
            mf_with = n_distinct(a$prop_id[a$property_type == "Multi-family" & !is.na(a$prop_id)]),
@@ -2730,7 +3297,7 @@ for (t1 in names(dp_opts$t1)) {
            mf_units = sum(a$units[a$property_type == "Multi-family"]),
            other_units = sum(a$units[!a$property_type %in% c("Single-family", "Multi-family")])) })
   p2 <- bind_rows(p2, p2 %>% summarise(across(-CPA, sum)) %>% mutate(CPA = "All six CPAs"))
-  if (t1 == "permit") qa_add(8, "Decision 2: units on single-family and multi-family properties match the CPA property-type tables, six CPAs",
+  if (t1 == "all") qa_add(8, "Decision 2: units on single-family and multi-family properties match the CPA property-type tables, six CPAs",
                              paste(fmt(sum(adu_tbl$units_sf)), fmt(sum(adu_tbl$units_mf)), sep = " / "),
                              paste(fmt(p2$sf_units[7]), fmt(p2$mf_units[7]), sep = " / "),
                              p2$sf_units[7] == sum(adu_tbl$units_sf) && p2$mf_units[7] == sum(adu_tbl$units_mf), stop_if_fail = TRUE)
@@ -2748,22 +3315,36 @@ for (t1 in names(dp_opts$t1)) {
 
 ## 3. Which definition of ADU-eligible
 
-Both tiers apply the 4,500 sq ft floor. Tier B also removes lots that lie in both a Very High Fire Hazard Severity Zone and a Hillside Area. That rule is not enforced as written: since December 30, 2024 the City has not applied it to the ADUs state law requires it to approve, and the rule is being rewritten (see the hillside-fire flag under [Parcels and land use definitions](#parcels-and-land-use-definitions)). A lot tier B removes can therefore still get an ADU, so the choice is whether to treat those lots as eligible (tier A) or set them aside (tier B).
+There are now four tiers, built from two choices: the lot floor (4,000 or 4,500 sq ft) and the hillside-fire screen (none, the ordinance's screen with its two exempt CPAs, or a screen with no exemption). Tiers B and C are the two the report has used so far, under their earlier names A and B.
+
+The hillside-fire rule removes lots that lie in both a Very High Fire Hazard Severity Zone and a Hillside Area. That rule is not enforced as written: since December 30, 2024 the City has not applied it to the ADUs state law requires it to approve, and the rule is being rewritten (see the hillside-fire flag under [Parcels and land use definitions](#parcels-and-land-use-definitions)). A lot tiers C and D remove can therefore still get an ADU, so the choice is whether to treat those lots as eligible or set them aside.
+
+Three cautions before reading tiers A and D. The 4,000 sq ft floor was added at the team's request and has no cited source yet. The draft rule does not ban ADUs on hillside-fire lots: it allows them with sprinklers, one parking space, a 20-foot roadway and Title 14 compliance, and City Planning does not apply the restriction to ADUs that state law requires cities to approve. And the draft redefines the area as a "Fire Restriction Area", which this report has not mapped; tier D uses the two layers the report already has. Tier D is not a smaller version of tier C: it has a lower floor and a stricter screen, so it is larger than C wherever no lot is flagged.
 
 ```{r dp-part3, results='asis'}
+rem <- land_tbl %>% transmute(CPA = cpa, A = eA, B = eB, C = eC, D = eD, flagged = rmD)
+rem <- bind_rows(rem, rem %>% summarise(across(-CPA, sum)) %>% mutate(CPA = "All six CPAs"))
+rem_hdr <- tibble(CPA = c("Lot floor", "Hillside-fire screen"), A = c("4,000 sq ft", "None"), B = c("4,500 sq ft", "None"),
+                  C = c("4,500 sq ft", "Removes flagged lots, except in exempt CPAs"), D = c("4,000 sq ft", "Removes flagged lots everywhere"), flagged = c("", ""))
+cat(dp_html(bind_rows(rem_hdr, rem %>% mutate(across(-CPA, fmt))) %>%
+              rename(`Tier A` = A, `Tier B` = B, `Tier C` = C, `Tier D` = D, `Tier A lots in both the hillside and fire layers` = flagged),
+            caption = "Lots remaining under each tier, six candidate CPAs (single-family and multi-family lots)",
+            note = "The first two rows give each tier's lot floor and screen. Tier B was tier A, and tier C was tier B, in earlier versions of this report. Exempt CPAs: Northeast Los Angeles and Silver Lake - Echo Park - Elysian Valley (LAMC 12.22 A.33(c)(4)); of the six candidates only Northeast Los Angeles is exempt, which is why tier D cuts it by about half. This table does not change with the controls.",
+            align = c("l", rep("r", 5)), bold_rows = nrow(rem) + 2))
 dp_state_line(c("t1", "t2"))
 for (t1 in names(dp_opts$t1)) for (t2 in names(dp_opts$t2)) {
-  p3 <- map_dfr(focus_cpas, function(cc) { A <- cpa_counts(cc, t1, t2, "A"); B <- cpa_counts(cc, t1, t2, "B")
-    tibble(CPA = cc, lots = A$lots, eligA = A$elig, eligB = B$elig, units = A$units, outA = A$outside, outB = B$outside) })
+  p3 <- map_dfr(focus_cpas, function(cc) { x <- lapply(setNames(tiers, tiers), function(tt) cpa_counts(cc, t1, t2, tt))
+    tibble(CPA = cc, lots = x$A$lots, units = x$A$units, eA = x$A$elig, eB = x$B$elig, eC = x$C$elig, eD = x$D$elig,
+           oA = x$A$outside, oB = x$B$outside, oC = x$C$outside, oD = x$D$outside) })
   p3 <- bind_rows(p3, p3 %>% summarise(across(-CPA, sum)) %>% mutate(CPA = "All six CPAs"))
-  dp_view(dp_html(p3 %>% transmute(CPA, `Lots considered` = fmt(lots), `Eligible lots, tier A` = fmt(eligA), `Eligible lots, tier B` = fmt(eligB),
-                                   `Lots tier B removes` = fmt(eligA - eligB), `ADU units` = fmt(units),
-                                   `ADU units on lots outside tier A` = fmt(outA), `ADU units on lots outside tier B` = fmt(outB),
-                                   `ADU units per 100 eligible lots, tier A` = fmt(100 * units / eligA, 1),
-                                   `ADU units per 100 eligible lots, tier B` = fmt(100 * units / eligB, 1)),
-                  caption = "Decision 3. Eligible lots and ADU units under tier A and tier B, six candidate CPAs (lots; ADU units)",
-                  note = "Tier A: lots of 4,500 sq ft or more. Tier B: tier A less lots flagged hillside-fire (none in Northeast Los Angeles, which the ordinance exempts). ADU units on lots outside a tier: units built on lots under 4,500 sq ft and, for tier B, on flagged lots; they show that ADUs are built on lots the tier leaves out. Units per 100 eligible lots = all ADU units counted ÷ eligible lots.",
-                  align = c("l", rep("r", 9)), bold_rows = 7), t1 = t1, t2 = t2)
+  dp_view(dp_html(p3 %>% transmute(CPA, `Lots considered` = fmt(lots), `ADU units` = fmt(units),
+                                   A = fmt(eA), B = fmt(eB), C = fmt(eC), D = fmt(eD),
+                                   `A ` = fmt(oA), `B ` = fmt(oB), `C ` = fmt(oC), `D ` = fmt(oD),
+                                   `A  ` = fmt(100 * units / eA, 1), `B  ` = fmt(100 * units / eB, 1), `C  ` = fmt(100 * units / eC, 1), `D  ` = fmt(100 * units / eD, 1)),
+                  caption = "Decision 3. Eligible lots and ADU units under the four tiers, six candidate CPAs (lots; ADU units)",
+                  note = "Tier A: lots of 4,000 sq ft or more. Tier B: lots of 4,500 sq ft or more. Tier C: tier B less lots flagged hillside-fire (none in Northeast Los Angeles, which the ordinance exempts). Tier D: tier A less every lot in both the hillside and fire layers, with no exemption. ADU units on lots outside a tier: units built on lots under the tier's floor and, for tiers C and D, on lots its screen removes; they show that ADUs are built on lots the tier leaves out. Units per 100 eligible lots = all ADU units counted ÷ eligible lots.",
+                  align = c("l", rep("r", 14)), bold_rows = 7,
+                  header = c(" " = 3, "Eligible lots, by tier" = 4, "ADU units on lots outside the tier" = 4, "ADU units per 100 eligible lots" = 4)), t1 = t1, t2 = t2)
 }
 ```
 
@@ -2818,7 +3399,8 @@ for (t1 in names(dp_opts$t1)) for (t2 in names(dp_opts$t2)) for (t3 in names(dp_
                   align = c("l", rep("r", 6)), header = c(" " = 1, "San Fernando Valley" = 1, "South LA" = 3, "Eastside" = 2)),
           t1 = t1, t2 = t2, t3 = t3, t4 = t4)
 }
-qa_add(8, "Decision 5: one finished table for each of the 24 combinations of choices", "24", "24", TRUE)
+qa_add(8, "Decision 5: one finished table for each of the 48 combinations of choices", "48",
+       length(dp_opts$t1) * length(dp_opts$t2) * length(dp_opts$t3) * length(dp_opts$t4), length(dp_opts$t1) * length(dp_opts$t2) * length(dp_opts$t3) * length(dp_opts$t4) == 48)
 ```
 
 ```{r dp-script, results='asis', echo=FALSE}
@@ -2874,6 +3456,33 @@ show_compare(c("West Adams - Baldwin Hills - Leimert", "South Los Angeles", "Sou
 show_compare(c("Northeast Los Angeles", "Boyle Heights"), "Community profile: Eastside candidates")
 ```
 
+### Homeownership change, side by side
+
+```{r stage8-own-change}
+chg_keys <- c(own_rate = "Homeownership rate", blk_own = "Black owner households", blk_rate = "Share of Black households who own",
+              blk_shr = "Black share of owner households", lat_own = "Latino owner households",
+              lat_rate = "Share of Latino households who own", lat_shr = "Latino share of owner households")
+cell_chg <- function(type, e19, e24, c, m, s) {
+  f1 <- function(e) ifelse(type == "count", fmt(e), paste0(fmt(100 * e, 1), "%"))
+  paste0(f1(e19), " → ", f1(e24), " (", ifelse(c > 0, "+", ""), ifelse(type == "count", fmt(c), paste0(fmt(100 * c, 1), " pts")),
+         " ± ", ifelse(type == "count", fmt(m), fmt(100 * m, 1)), ifelse(s, "*", ""), ")")
+}
+chg6 <- own_chg_cpa %>% filter(key %in% names(chg_keys)) %>%
+  mutate(cell = cell_spec(cell_chg(type, est19, est24, chg, chg_moe, sig), bold = sig, color = ifelse(sig, "black", "#777777")),
+         Measure = chg_keys[key]) %>%
+  select(Measure, cpa, cell) %>% pivot_wider(names_from = cpa, values_from = cell) %>%
+  arrange(match(Measure, chg_keys)) %>% select(Measure, all_of(focus_cpas))
+qa_add(8, "Homeownership change, side by side: every cell present", "no missing cells", sum(is.na(as.matrix(chg6[, focus_cpas]))),
+       !anyNA(as.matrix(chg6[, focus_cpas])), stop_if_fail = TRUE)
+names(chg6)[-1] <- short
+chg6 %>% kable(format = "html", escape = FALSE, align = c("l", rep("r", 6)),
+               caption = "Homeownership change, 2015–2019 to 2020–2024, six candidate CPAs (2015–2019 → 2020–2024, with the change ± its 90% margin of error)") %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE, font_size = 12) %>%
+  add_header_above(c(" " = 1, "San Fernando Valley" = 1, "South LA" = 3, "Eastside" = 2)) %>%
+  footnote(general = paste("Each CPA's tracts in each period (2010 boundaries for 2015–2019, 2020 boundaries for 2020–2024), assigned when at least half of the tract lies inside the CPA.", own_chg_note,
+                           "Bold = larger than the margin of error; grey = within it. The same change for each tract is on the layered map in each CPA section, where the focus tracts are outlined."),
+           general_title = "Note: ", footnote_as_chunk = TRUE)
+```
 
 # Appendix
 
@@ -2923,9 +3532,11 @@ tract_xwalk %>% mutate(label = sprintf("%.2f", as.numeric(CT20) / 100)) %>%
 ## Validation against published counts
 
 ```{r appendix-validation}
-y <- function(a, b) adu %>% filter(issue_year >= a, issue_year <= b)
-u_y <- function(yy) sum(adu$units[adu$issue_year == yy])
-crosstown <- adu %>% filter(ff_issue_dt >= as.Date("2020-01-01"), ff_issue_dt <= as.Date("2025-04-30"))
+# Published counts are of permits, so the comparison uses the LADBS permitted group only
+adu_val <- filter(adu, source_tag == tag_levels[1])
+y <- function(a, b) adu_val %>% filter(issue_year >= a, issue_year <= b)
+u_y <- function(yy) sum(adu_val$units[adu_val$issue_year == yy])
+crosstown <- adu_val %>% filter(ff_issue_dt >= as.Date("2020-01-01"), ff_issue_dt <= as.Date("2025-04-30"))
 tribble(
   ~Benchmark, ~Period, ~`Their count`, ~`This report`, ~Assessment,
   "Crane (2020), UCLA dissertation; LADBS permits", "2017–2018", "Over 6,000 ADUs permitted",

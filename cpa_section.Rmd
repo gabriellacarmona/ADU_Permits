@@ -18,14 +18,16 @@ as_cc <- adu_tbl %>% filter(cpa == cc)
 a_cc  <- adu_focus %>% filter(cpa == cc)
 p_cc  <- prop_sf %>% filter(cpa == cc)
 older_cc <- sum(p_cc$older_adu, na.rm = TRUE)
+as_sf_cc <- adu_tbl_sf %>% filter(cpa == cc)
+tag_cc <- a_cc %>% count(source_tag, wt = units, .drop = FALSE)
 id <- gsub("[^a-z]", "", tolower(cc))
 ```
 
 ## `r cc`
 
 ```{r, results='asis'}
-cat(sprintf("%s has %s parcels, %s single-family lots and %s eligible lots in tier A. From %s, %s ADU projects added %s ADU units on parcels in the CPA; %s are completed. Its %d census tracts hold %s residents.\n\n",
-            cc, fmt(ls_cc$r1), fmt(ls_cc$r2), fmt(ls_cc$r8), window_label, fmt(as_cc$projects), fmt(as_cc$units),
+cat(sprintf("%s has %s parcels, %s single-family lots and %s eligible lots in tier B (4,500 sq ft or more). Counting %s, the CPA has %s ADUs with %s ADU units; %s are completed. Its %d census tracts hold %s residents.\n\n",
+            cc, fmt(ls_cc$r1), fmt(ls_cc$r2), fmt(ls_cc$eB), window_label, fmt(as_cc$projects), fmt(as_cc$units),
             pct(as_cc$completed / as_cc$units), nrow(xw_cc),
             fmt(acs_cpa$estimate[acs_cpa$cpa == cc & acs_cpa$measure == "Total population"])))
 ```
@@ -65,97 +67,120 @@ l2 <- tribble(~Label, ~n, ~base,
   "Multi-family lots", r$r_mf, r$r1,
   "2–4 units", r$r6a, r$r1,
   "5+ units", r$r6b, r$r1,
-  "Single-family (4,500 sq ft +)", r$r3, r$r1,
-  "Multi-family (4,500 sq ft +)", r$r6, r$r1,
-  "Single Family and Multi-Family ADU Eligible Properties (Tier A)", r$r8, r$r1,
-  "Single-family (4,500 sq ft +)", r$r5, r$r1,
-  "Multi-family (4,500 sq ft +)", r$r7, r$r1,
-  "Single Family and Multi-Family ADU Eligible Properties (Tier B)", r$r9, r$r1,
-  "Lots removed by the hillside-fire screen", r$r10, r$r8)
+  "Single-family (4,000 sq ft +)", r$sfA, r$r1,
+  "Multi-family (4,000 sq ft +)", r$mfA, r$r1,
+  "Single Family and Multi-Family ADU Eligible Properties (Tier A)", r$eA, r$r1,
+  "Single-family (4,500 sq ft +)", r$sfB, r$r1,
+  "Multi-family (4,500 sq ft +)", r$mfB, r$r1,
+  "Single Family and Multi-Family ADU Eligible Properties (Tier B)", r$eB, r$r1,
+  "Single-family (4,500 sq ft +)", r$sfC, r$r1,
+  "Multi-family (4,500 sq ft +)", r$mfC, r$r1,
+  "Single Family and Multi-Family ADU Eligible Properties (Tier C)", r$eC, r$r1,
+  "Lots removed by the hillside-fire screen (tier B less tier C)", r$rmC, r$eB,
+  "Single-family (4,000 sq ft +)", r$sfD, r$r1,
+  "Multi-family (4,000 sq ft +)", r$mfD, r$r1,
+  "Single Family and Multi-Family ADU Eligible Properties (Tier D)", r$eD, r$r1,
+  "Lots removed by the hillside-fire screen (tier A less tier D)", r$rmD, r$eA)
 qa_add(7, paste0("Land use summary: multi-family lots = 2–4 units + 5+ units, ", cc), fmt(r$r_mf), fmt(r$r6a + r$r6b),
        r$r_mf == r$r6a + r$r6b, stop_if_fail = TRUE)
 n_mf_small <- sum(p_cc$is_mf & p_cc$lot_sqft < 4500)
-qa_add(7, paste0("Land use summary: multi-family lots = eligible (4,500 sq ft +) + under 4,500 sq ft, ", cc), fmt(r$r_mf), fmt(r$r6 + n_mf_small),
-       r$r_mf == r$r6 + n_mf_small && r$r6 <= r$r_mf, stop_if_fail = TRUE)
-qa_add(7, paste0("Land use summary: tier totals equal single-family + multi-family rows (tiers A and B), ", cc), "equal", "checked",
-       r$r8 == r$r3 + r$r6 && r$r9 == r$r5 + r$r7, stop_if_fail = TRUE)
-n_flag <- sum(p_cc$hillside_fire); n_flag_elig <- sum(p_cc$hillside_fire & (p_cc$sfA | p_cc$mfA))
-qa_add(7, paste0("Land use summary: lots removed by the hillside-fire screen equal the eligible lots flagged, ", cc), fmt(n_flag_elig), fmt(r$r10),
-       r$r10 == n_flag_elig, stop_if_fail = TRUE)
-qa_add(7, paste0("Land use summary: lots removed, expected zero outside West Adams and Arleta - Pacoima, ", cc),
-       if (cc %in% c("West Adams - Baldwin Hills - Leimert", "Arleta - Pacoima")) "> 0" else "0", fmt(r$r10),
-       if (cc %in% c("West Adams - Baldwin Hills - Leimert", "Arleta - Pacoima")) r$r10 > 0 else r$r10 == 0,
+qa_add(7, paste0("Land use summary: multi-family lots = eligible (4,500 sq ft +) + under 4,500 sq ft, ", cc), fmt(r$r_mf), fmt(r$mfB + n_mf_small),
+       r$r_mf == r$mfB + n_mf_small && r$mfB <= r$r_mf, stop_if_fail = TRUE)
+qa_add(7, paste0("Land use summary: tier totals equal single-family + multi-family rows (tiers A to D), ", cc), "equal", "checked",
+       r$eA == r$sfA + r$mfA && r$eB == r$sfB + r$mfB && r$eC == r$sfC + r$mfC && r$eD == r$sfD + r$mfD, stop_if_fail = TRUE)
+qa_add(7, paste0("Land use summary: A >= B >= C and A >= D, ", cc), "holds", paste(fmt(c(r$eA, r$eB, r$eC, r$eD)), collapse = " / "),
+       r$eA >= r$eB && r$eB >= r$eC && r$eA >= r$eD, stop_if_fail = TRUE)
+n_flag <- sum(p_cc$hillside_fire); n_flag_elig <- sum(p_cc$hillside_fire & (p_cc$sfB | p_cc$mfB))
+qa_add(7, paste0("Land use summary: lots tier C removes equal the tier B lots flagged hillside-fire, ", cc), fmt(n_flag_elig), fmt(r$rmC),
+       r$rmC == n_flag_elig, stop_if_fail = TRUE)
+qa_add(7, paste0("Land use summary: lots tier D removes equal the tier A lots in both layers, ", cc), fmt(sum(p_cc$eligA & p_cc$hf_all)), fmt(r$rmD),
+       r$rmD == sum(p_cc$eligA & p_cc$hf_all), stop_if_fail = TRUE)
+qa_add(7, paste0("Land use summary: lots tier C removes, expected zero outside West Adams and Arleta - Pacoima, ", cc),
+       if (cc %in% c("West Adams - Baldwin Hills - Leimert", "Arleta - Pacoima")) "> 0" else "0", fmt(r$rmC),
+       if (cc %in% c("West Adams - Baldwin Hills - Leimert", "Arleta - Pacoima")) r$rmC > 0 else r$rmC == 0,
        reason = if (n_flag > 0 && n_flag_elig == 0) sprintf(
-         "All %d parcels flagged hillside-fire here are commercial, vacant or other parcels, which are not eligible lots in either tier, so tier B removes none.",
+         "All %d parcels flagged hillside-fire here are commercial, vacant or other parcels, or lots under 4,500 sq ft, which are not eligible lots in tier B, so tier C removes none.",
          n_flag) else NA_character_)
 l2 %>% transmute(Label, Parcels = fmt(n), Share = pct(n / base)) %>%
   kable(format = "html", caption = paste0("Land use summary, ", cc, " (parcels)"),
         col.names = c("", "Parcels", "Share"), align = c("l", "r", "r")) %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE) %>%
   add_indent(4:5, level_of_indent = 2) %>%
-  pack_rows("Tier A", 6, 8) %>%
-  pack_rows("Tier B", 9, 12) %>%
-  row_spec(c(8, 11), bold = TRUE) %>%
-  footnote(general = paste("Tier A = single-family and multi-family lots of 4,500 sq ft or more; the eligible-properties row is the sum of the two rows above it. Tier B = tier A less lots flagged hillside-fire. Shares are of total parcels, except \"Lots removed by the hillside-fire screen\" (tier A total less tier B total), which is a share of the tier A total.",
-                           "\"Eligible\" is an internal definition used in this report. The ordinance sets no minimum lot size; the 4,500 sq ft floor marks lots with enough available buildable space to physically fit an ADU.",
-                           "Tier B removes lots whose interior point lies in both the Very High Fire Hazard Severity Zone (City of LA GeoHub, data updated August 27, 2020) and the hillside layer, outside the Northeast LA and Silver Lake - Echo Park - Elysian Valley CPAs, which the ordinance exempts (LAMC 12.22 A.33(c)(4)). A flagged lot can still add an ADU with an automatic fire sprinkler system, one off-street parking space and frontage on a street with 20 feet or more of improved roadway; it is not barred, so tier B is an upper bound on what the restriction removes.",
+  pack_rows("Tier A: 4,000 sq ft floor, no screen", 6, 8) %>%
+  pack_rows("Tier B: 4,500 sq ft floor, no screen", 9, 11) %>%
+  pack_rows("Tier C: 4,500 sq ft floor, hillside-fire lots removed except in exempt CPAs", 12, 15) %>%
+  pack_rows("Tier D: 4,000 sq ft floor, hillside-fire lots removed everywhere", 16, 19) %>%
+  row_spec(c(8, 11, 14, 18), bold = TRUE) %>%
+  footnote(general = paste("Four tiers, each counting single-family and multi-family lots; the eligible-properties row is the sum of the two rows above it. Tier A: lots of 4,000 sq ft or more. Tier B: lots of 4,500 sq ft or more (tier A in earlier versions of this report). Tier C: tier B less lots flagged hillside-fire (tier B in earlier versions). Tier D: tier A less every lot in both layers, with no exemption. Shares are of total parcels, except the two \"Lots removed\" rows, which are shares of the tier they are taken from.",
+                           "\"Eligible\" is an internal definition used in this report. The ordinance sets no minimum lot size; the lot floors mark lots with enough available buildable space to physically fit an ADU. The 4,500 sq ft floor is the one used so far; the 4,000 sq ft floor was added at the team's request and has no cited source yet.",
+                           "Tiers C and D remove lots whose interior point lies in both the Very High Fire Hazard Severity Zone (City of LA GeoHub, data updated August 27, 2020) and the hillside layer. Tier C leaves them in the Northeast LA and Silver Lake - Echo Park - Elysian Valley CPAs, which the ordinance exempts (LAMC 12.22 A.33(c)(4)); tier D removes them everywhere. A flagged lot can still add an ADU with an automatic fire sprinkler system, one off-street parking space and frontage on a street with 20 feet or more of improved roadway; it is not barred, so tiers C and D are a stricter screen, not a legal limit. Tier D is larger than tier C wherever no lot is flagged, because its floor is lower.",
                            "County parcels (August 2, 2025) assigned by interior point; land use from the 2026 Assessor roll. Multi-family lots: 2–4 units and 5+ units by Assessor use code."),
            general_title = "Note: ", footnote_as_chunk = TRUE, threeparttable = TRUE)
 ```
 
 ```{r}
 # ---- Eligible lots map: where the eligible lots are -----------------------------------------
-lots <- p_cc %>% filter(eligA) %>% select(AIN, is_sf, is_mf, hillside_fire, ct20) %>%
+lots <- p_cc %>% filter(eligA) %>% select(AIN, is_sf, is_mf, hillside_fire, hf_all, big45, ct20) %>%
   st_simplify(preserveTopology = TRUE, dTolerance = 5)   # simplified before embedding
 n_vert <- sum(vapply(st_geometry(lots), function(gm) nrow(st_coordinates(gm)), 1L))
 est_mb <- (n_vert * 20 + nrow(lots) * 40) / 1e6   # 5-decimal coordinates: about 20 bytes a vertex in the page
 use_points <- est_mb > 8          # size budget: points if the polygons would exceed ~8 MB
 if (use_points) lots <- st_point_on_surface(lots)
 lots_ll <- to_ll(lots, digits = 5)
-grp_sets <- list(sf_keep = lots_ll$is_sf & !lots_ll$hillside_fire, sf_flag = lots_ll$is_sf & lots_ll$hillside_fire,
-                 mf_keep = lots_ll$is_mf & !lots_ll$hillside_fire, mf_flag = lots_ll$is_mf & lots_ll$hillside_fire)
+# Each lot is drawn once, in one of five groups per property type; the control restyles
+# the groups for the tier chosen (filled, grey outline = removed by the screen, or hidden).
+lot_kind <- with(lots_ll, case_when(big45 & !hf_all ~ "big_keep", big45 & !hillside_fire ~ "big_fx", big45 ~ "big_fl",
+                                    !hf_all ~ "sm_keep", TRUE ~ "sm_fl"))
+lot_grp <- paste0(ifelse(lots_ll$is_sf, "sf_", "mf_"), lot_kind)
+tier_state <- list(A = c(big_keep = 1, big_fx = 1, big_fl = 1, sm_keep = 1, sm_fl = 1),      # 1 filled, 2 grey outline, 0 hidden
+                   B = c(big_keep = 1, big_fx = 1, big_fl = 1, sm_keep = 0, sm_fl = 0),
+                   C = c(big_keep = 1, big_fx = 1, big_fl = 2, sm_keep = 0, sm_fl = 0),
+                   D = c(big_keep = 1, big_fx = 2, big_fl = 2, sm_keep = 1, sm_fl = 2))
 col_sf <- "#3A6EA5"; col_mf <- "#8E5BB5"; col_rm <- "#7F7F7F"
 tcount <- st_drop_geometry(p_cc) %>% group_by(ct20) %>%
-  summarise(total = n(), sf_A = sum(sfA), sf_B = sum(sfB), all_A = sum(eligA), all_B = sum(eligB), .groups = "drop")
-tr_l3 <- tr_clip %>% left_join(tcount, by = c("CT20" = "ct20")) %>% mutate(across(c(total, sf_A, sf_B, all_A, all_B), ~ coalesce(.x, 0L)))
+  summarise(total = n(), sf_A = sum(sfA), sf_B = sum(sfB), sf_C = sum(sfC), sf_D = sum(sfD),
+            all_A = sum(eligA), all_B = sum(eligB), all_C = sum(eligC), all_D = sum(eligD), .groups = "drop")
+view_names <- c("sf_A", "sf_B", "sf_C", "sf_D", "all_A", "all_B", "all_C", "all_D")
+tr_l3 <- tr_clip %>% left_join(tcount, by = c("CT20" = "ct20")) %>% mutate(across(c(total, all_of(view_names)), ~ coalesce(.x, 0L)))
 tr_l3_ll <- to_ll(tr_l3); tr_pts_ll <- to_ll(st_point_on_surface(tr_l3))
-pal_tr <- colorNumeric("Greens", domain = c(0, max(c(tr_l3$sf_A, tr_l3$all_A), 1)))
-views <- list(sf_A = c("sf_keep", "sf_flag", "tr_sf_A"), sf_B = c("sf_keep", "sf_flag_rm", "tr_sf_B"),
-              all_A = c("sf_keep", "sf_flag", "mf_keep", "mf_flag", "tr_all_A"),
-              all_B = c("sf_keep", "sf_flag_rm", "mf_keep", "mf_flag_rm", "tr_all_B"))
-add_lots <- function(m, sel, grp, color, removed = FALSE) {
+pal_tr <- colorNumeric("Greens", domain = c(0, max(tr_l3$all_A, 1)))
+grp_n <- table(factor(lot_grp, levels = as.vector(outer(c("sf_", "mf_"), names(tier_state$A), paste0))))
+tier_from_groups <- sapply(names(tier_state), function(tt) sum(grp_n[as.vector(outer(c("sf_", "mf_"), names(tier_state[[tt]])[tier_state[[tt]] == 1], paste0))]))
+qa_add(7, paste0("Eligible lots map: lots filled under each tier equal the land use summary (A / B / C / D), ", cc),
+       paste(fmt(c(r$eA, r$eB, r$eC, r$eD)), collapse = " / "), paste(fmt(tier_from_groups), collapse = " / "),
+       all(tier_from_groups == c(r$eA, r$eB, r$eC, r$eD)), stop_if_fail = TRUE)
+add_lots <- function(m, sel, grp) {
   if (!any(sel)) return(m)
   d <- lots_ll[sel, ]
-  if (use_points) {
-    addCircleMarkers(m, data = d, radius = 2, stroke = removed, color = color, weight = 1, fill = !removed,
-                     fillColor = color, fillOpacity = 0.7, group = grp)
-  } else {
-    addPolygons(m, data = d, weight = if (removed) 0.8 else 0.3, color = color, opacity = 0.9,
-                fill = !removed, fillColor = color, fillOpacity = 0.55, group = grp)
-  }
+  if (use_points) addCircleMarkers(m, data = d, radius = 2, stroke = FALSE, color = col_rm, weight = 1, fill = TRUE,
+                                   fillColor = col_sf, fillOpacity = 0.7, group = grp, options = pathOptions(interactive = FALSE))
+  else addPolygons(m, data = d, weight = 0.3, color = col_sf, opacity = 0.9, fill = TRUE, fillColor = col_sf, fillOpacity = 0.55,
+                   group = grp, options = pathOptions(interactive = FALSE))
 }
+lab_el <- sprintf(paste0("<b>Tract %s</b><br>Total parcels: %s<br>Eligible lots, single-family and multi-family: A %s &middot; B %s &middot; C %s &middot; D %s<br>",
+                         "Eligible lots, single-family only: A %s &middot; B %s &middot; C %s &middot; D %s"),
+                  tr_l3_ll$LABEL, fmt(tr_l3_ll$total), fmt(tr_l3_ll$all_A), fmt(tr_l3_ll$all_B), fmt(tr_l3_ll$all_C), fmt(tr_l3_ll$all_D),
+                  fmt(tr_l3_ll$sf_A), fmt(tr_l3_ll$sf_B), fmt(tr_l3_ll$sf_C), fmt(tr_l3_ll$sf_D))
 m <- leaflet_base(bm_key = cpa_key(cc)) %>% fit_to(bd) %>%
   addPolygons(data = to_ll(bd), fill = FALSE, color = "black", weight = 2.5,
-              options = pathOptions(interactive = FALSE))   # outline only: hover reaches the layer below
-for (v in c("sf_A", "sf_B", "all_A", "all_B")) {
-  lab <- sprintf("<b>Tract %s</b><br>Eligible lots in this view: %s<br>Total parcels: %s<br>Share eligible: %s",
-                 tr_l3_ll$LABEL, fmt(tr_l3_ll[[v]]), fmt(tr_l3_ll$total), pct(tr_l3_ll[[v]] / pmax(tr_l3_ll$total, 1)))
-  m <- m %>%
-    addPolygons(data = tr_l3_ll, fillColor = pal_tr(tr_l3_ll[[v]]), fillOpacity = 0.35, color = "#444444", weight = 0.8,
-                label = lapply(lab, HTML), group = paste0("tr_", v)) %>%
-    addLabelOnlyMarkers(data = tr_pts_ll, label = fmt(tr_pts_ll[[v]]), group = paste0("tr_", v),
-                        labelOptions = labelOptions(noHide = TRUE, textOnly = TRUE, direction = "center", style = label_style))
-}
+              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
+  addPolygons(data = tr_l3_ll, layerId = paste0("el_", tr_l3_ll$CT20), fillColor = pal_tr(tr_l3_ll$sf_B), fillOpacity = 0.35,
+              color = "#444444", weight = 0.8, label = lapply(lab_el, HTML)) %>%
+  addLabelOnlyMarkers(data = tr_pts_ll, label = fmt(tr_pts_ll$sf_B), group = "el_lab",
+                      labelOptions = labelOptions(noHide = TRUE, textOnly = TRUE, direction = "center", style = label_style))
+for (g in names(grp_n)[grp_n > 0]) m <- add_lots(m, lot_grp == g, g)
+el_data <- list(states = lapply(tier_state, as.list), groups = names(grp_n)[grp_n > 0], points = use_points,
+                ids = paste0("el_", tr_l3_ll$CT20), col_sf = col_sf, col_mf = col_mf, col_rm = col_rm,
+                tr = setNames(lapply(view_names, function(v) list(val = fmt(tr_l3_ll[[v]]), col = pal_tr(tr_l3_ll[[v]]))), view_names))
 m <- m %>%
-  add_lots(grp_sets$sf_keep, "sf_keep", col_sf) %>% add_lots(grp_sets$sf_flag, "sf_flag", col_sf) %>%
-  add_lots(grp_sets$sf_flag, "sf_flag_rm", col_rm, removed = TRUE) %>%
-  add_lots(grp_sets$mf_keep, "mf_keep", col_mf) %>% add_lots(grp_sets$mf_flag, "mf_flag", col_mf) %>%
-  add_lots(grp_sets$mf_flag, "mf_flag_rm", col_rm, removed = TRUE) %>%
   addLegend("bottomright", colors = c(col_sf, col_mf, col_rm),
-            labels = c("Eligible single-family lot", "Eligible multi-family lot", "Removed in tier B (outline)"), opacity = 0.8) %>%
+            labels = c("Eligible single-family lot", "Eligible multi-family lot", "Removed by the hillside-fire screen (outline)"), opacity = 0.8) %>%
   onRender("
     function(el, x, data) {
-      var map = this, nm = el.id;
+      var map = this, nm = el.id, labs = [];
+      function arr(v) { return Array.isArray(v) ? v : [v]; }
+      var lgl = map.layerManager.getLayerGroup('el_lab', false);
+      if (lgl) lgl.eachLayer(function(l) { labs.push(l); });
       var ctrl = L.control({position: 'topright'});
       ctrl.onAdd = function() {
         var div = L.DomUtil.create('div', 'leaflet-bar');
@@ -163,9 +188,11 @@ m <- m %>%
         div.innerHTML = '<b>Property type</b><br>' +
           '<label><input type=\"radio\" name=\"' + nm + '_pt\" value=\"sf\" checked> Single-family</label><br>' +
           '<label><input type=\"radio\" name=\"' + nm + '_pt\" value=\"all\"> All eligible</label><br>' +
-          '<b>Screen</b><br>' +
-          '<label><input type=\"radio\" name=\"' + nm + '_sc\" value=\"A\" checked> Tier A (size)</label><br>' +
-          '<label><input type=\"radio\" name=\"' + nm + '_sc\" value=\"B\"> Tier B (size + hillside-fire)</label>';
+          '<b>Tier</b><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_sc\" value=\"A\"> A: 4,000 sq ft +</label><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_sc\" value=\"B\" checked> B: 4,500 sq ft +</label><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_sc\" value=\"C\"> C: B less hillside-fire lots</label><br>' +
+          '<label><input type=\"radio\" name=\"' + nm + '_sc\" value=\"D\"> D: A less hillside-fire lots, no exemption</label>';
         L.DomEvent.disableClickPropagation(div);
         return div;
       };
@@ -173,22 +200,29 @@ m <- m %>%
       function update() {
         var pt = el.querySelector('input[name=\"' + nm + '_pt\"]:checked').value;
         var sc = el.querySelector('input[name=\"' + nm + '_sc\"]:checked').value;
-        var show = data.views[pt + '_' + sc];
-        data.groups.forEach(function(g) {
-          var lg = map.layerManager.getLayerGroup(g, false);
-          if (!lg) return;
-          if (show.indexOf(g) >= 0) { if (!map.hasLayer(lg)) map.addLayer(lg); } else { map.removeLayer(lg); }
+        arr(data.groups).forEach(function(g) {
+          var lg = map.layerManager.getLayerGroup(g, false); if (!lg) return;
+          var isSf = g.indexOf('sf_') === 0, st = +data.states[sc][g.substring(3)];
+          if (st === 0 || (pt === 'sf' && !isSf)) { map.removeLayer(lg); return; }
+          var col = isSf ? data.col_sf : data.col_mf, sty;
+          if (data.points) sty = st === 2 ? {stroke: true, color: data.col_rm, weight: 1, fill: false}
+                                          : {stroke: false, fill: true, fillColor: col, fillOpacity: 0.7};
+          else sty = st === 2 ? {weight: 0.8, color: data.col_rm, opacity: 0.9, fill: false}
+                              : {weight: 0.3, color: col, opacity: 0.9, fill: true, fillColor: col, fillOpacity: 0.55};
+          lg.eachLayer(function(l) { l.setStyle(sty); });
+          if (!map.hasLayer(lg)) map.addLayer(lg);
         });
+        var v = data.tr[pt + '_' + sc], vals = arr(v.val), cols = arr(v.col), ids = arr(data.ids);
+        ids.forEach(function(id, i) { var l = map.layerManager.getLayer('shape', id); if (l) l.setStyle({fillColor: cols[i]}); });
+        labs.forEach(function(l, i) { l.setTooltipContent(String(vals[i])); });
       }
       el.addEventListener('change', update);
       update();
-    }", data = list(views = views,
-                    groups = c("sf_keep", "sf_flag", "sf_flag_rm", "mf_keep", "mf_flag", "mf_flag_rm",
-                               "tr_sf_A", "tr_sf_B", "tr_all_A", "tr_all_B")))
+    }", data = el_data)
 qa_add(7, paste0("Eligible lots map has lots, ", cc), ">0", fmt(nrow(lots)), nrow(lots) > 0, stop_if_fail = TRUE)
 tagList(tags$p(tags$b(paste0("Eligible lots, ", cc))), m,
         tags$p(style = "font-size: 12px;",
-               paste0("Use the controls to switch property type and screen; in tier B, lots the hillside-fire screen removes are grey outlines. Tracts (clipped to the CPA) are shaded by eligible lots in the current view, with the count printed; where counts overlap, zoom in or hover. Lots drawn as ",
+               paste0("Use the controls to switch property type and tier; the map opens on tier B, the 4,500 sq ft floor used in the rest of this section. Under tiers C and D, lots the hillside-fire screen removes are grey outlines; lots of 4,000 to 4,499 sq ft appear under tiers A and D only. Tracts (clipped to the CPA) are shaded by eligible lots in the current view, with the count printed; hover over a tract for every tier at once. Lots drawn as ",
                       if (use_points) "points (size budget)" else "simplified parcel outlines", ". ", basemap_credit, ".")))
 ```
 
@@ -200,17 +234,25 @@ s <- as_cc
 qa_add(7, paste0("ADU units by status: completed + in progress + stalled = total units, ", cc), fmt(s$units),
        fmt(s$completed + s$in_progress + s$stalled), s$completed + s$in_progress + s$stalled == s$units, stop_if_fail = TRUE)
 qa_add(7, paste0("ADU units by status: the CPA has ADU units, ", cc), ">0", fmt(s$units), s$units > 0, stop_if_fail = TRUE)
-tibble(Row = c(paste0("Total ADU units, ", window_label), "Completed", "In progress", "Stalled",
-               "Outside tier A: units on single-family or multi-family lots under 4,500 sq ft",
-               "Outside tier B: units on single-family or multi-family lots under 4,500 sq ft, or on any lot flagged hillside-fire"),
-       `ADU units` = fmt(c(s$units, s$completed, s$in_progress, s$stalled, s$outside_A, s$outside_B)),
-       `Share of total` = pct(c(s$units, s$completed, s$in_progress, s$stalled, s$outside_A, s$outside_B) / s$units)) %>%
-  tbl(caption = paste0("ADU units by status, ", cc, " (ADU units)"),
-      note = paste0(fmt(s$projects), " ADU projects. Projects are placed by their parcel's location. Status: completed = CofO, final inspection or CofC anywhere in the permit chain; stalled = no change in permit status since ",
-                    format(stall_cutoff, "%B %e, %Y") %>% str_squish(), " (three years or more); in progress = all other active projects. The two \"outside\" rows are already counted in the total and status rows."))
+status_tbl <- function(s, what) {
+  v <- c(s$units, s$completed, s$in_progress, s$stalled, s$outside_A, s$outside_B, s$outside_C, s$outside_D)
+  tibble(Row = c(paste0("Total ADU units, ", window_label), "Completed", "In progress", "Stalled",
+                 "Outside tier A: units on lots under 4,000 sq ft",
+                 "Outside tier B: units on lots under 4,500 sq ft",
+                 "Outside tier C: units on lots under 4,500 sq ft, or on any lot flagged hillside-fire",
+                 "Outside tier D: units on lots under 4,000 sq ft, or on any lot in both the hillside and fire layers"),
+         `ADU units` = fmt(v), `Share of total` = pct(v / s$units)) %>%
+    tbl(caption = paste0("ADU units by status, ", cc, ", ", what, " (ADU units)"),
+        note = paste0(fmt(s$projects), " ADUs, all tags counted together. Projects are placed by their parcel's location. Status: completed = CofO, final inspection or CofC anywhere in the permit chain; stalled = no change in permit status since ",
+                      format(stall_cutoff, "%B %e, %Y") %>% str_squish(), " (three years or more); in progress = all other active projects. The four \"outside\" rows count units on single-family or multi-family lots a tier leaves out; they are already counted in the total and status rows."))
+}
+qa_add(7, paste0("ADU units by status: single-family version adds up and does not exceed the all-property version, ", cc), "holds", "checked",
+       as_sf_cc$completed + as_sf_cc$in_progress + as_sf_cc$stalled == as_sf_cc$units && as_sf_cc$units <= s$units &&
+         as_sf_cc$units == sum(a_cc$units[a_cc$property_type == "Single-family"]), stop_if_fail = TRUE)
+sf_switch(status_tbl(s, "all properties"), status_tbl(as_sf_cc, "single-family properties only"))
 ```
 
-**Older or unpermitted ADUs (separate count):** `r fmt(older_cc)` single-family parcels in `r cc` carry an Assessor use code recording an ADU but hold no permitted ADU project from `r window_label`. Each counts as one ADU here and is never added to the permitted units above. The roll lags construction and the code does not say whether a unit was permitted, so this is an indicator, not a count of unpermitted units.
+The counts above include every ADU tag: `r fmt(tag_cc$n[1])` units on LADBS permitted ADUs (2017 to present), `r fmt(tag_cc$n[2])` on older permitted ADUs (2010 to 2016) and `r fmt(tag_cc$n[3])` grandfathered ADUs from the Assessor roll, which count as completed. See the table of ADUs by tag under [ADU identification](#adu-identification).
 
 ```{r}
 # ---- Properties with ADUs, then unit status by property type --------------
@@ -242,7 +284,7 @@ tibble(`Property type` = c("All properties with ADUs", "Single-family properties
 ```{r}
 # ---- Cumulative units by year, with a year slider ------------------
 ch_sf <- dated_chart(a_cc %>% filter(property_type == "Single-family"),
-                     paste0("Cumulative ADU units by year, single-family properties, ", cc))
+                     paste0("Cumulative ADU units by year, single-family properties, ", cc))  # shown one at a time, with a toggle
 ch_mf <- dated_chart(a_cc %>% filter(property_type == "Multi-family"),
                      paste0("Cumulative ADU units by year, multi-family properties, ", cc))
 for (tp in c("Single-family", "Multi-family")) {      # reconciliation with the property-type table
@@ -261,54 +303,16 @@ chart_notes <- tags$ul(style = "font-size: 12px;",
   tags$li("Stalled cannot be shown for past years: the extracts keep only each permit's latest status date."),
   tags$li(sprintf("Permits submitted but not issued by %s are not in the data. Submitted = the earliest SUBMITTED_DATE in the chain (the issue date where it is blank); projects submitted before 2017 enter the 2017 bar as ongoing.",
                   format(data_asof, "%B %e, %Y") %>% str_squish())))
-tagList(ch_sf$widget, ch_mf$widget, chart_notes)
+chart_notes <- tagAppendChild(chart_notes, tags$li("Older permitted ADUs (2010 to 2016) enter the 2017 bar as completed or ongoing. Grandfathered ADUs have no dates and are counted as completed in every bar."))
+tagList(chart_switch(ch_sf$widget, ch_mf$widget), chart_notes)
 ```
 
 ```{r}
-# ---- ADU projects map: where the ADUs are ----------------------------------------------------
+# ---- ADU points and tract counts for the layered tract map ------------------------------
 pts_cc <- adu_pts %>% filter(cpa == cc) %>% to_ll()
 tstat <- a_cc %>% group_by(ct20) %>%
   summarise(comp = sum(units[status == "Completed"]), prog = sum(units[status == "In progress"]),
-            stal = sum(units[status == "Stalled"]), units = sum(units), .groups = "drop")   # total last
-oc <- older_counts %>% filter(cpa == cc) %>% select(ct20, older = older_adu)
-tr_a5 <- tr_clip %>% left_join(tstat, by = c("CT20" = "ct20")) %>% left_join(oc, by = c("CT20" = "ct20")) %>%
-  mutate(across(c(units, comp, prog, stal, older), ~ coalesce(as.numeric(.x), 0)))
-tr_a5_ll <- to_ll(tr_a5); tp_ll <- to_ll(st_point_on_surface(tr_a5))
-cls5 <- tract_class$class[match(tr_a5_ll$CT20, tract_class$CT20)]      # class under the rule A + B + C
-qa_add(7, paste0("ADU projects map: every tract has a class for the working-class overlay, ", cc), nrow(tr_a5_ll),
-       sum(cls5 %in% names(wc_cols)), all(cls5 %in% names(wc_cols)), stop_if_fail = TRUE)
-lab5 <- sprintf("<b>Tract %s</b><br>ADU units: %s<br>Completed: %s<br>In progress: %s<br>Stalled: %s<br>Older or unpermitted ADUs (separate): %s<br>Tract class (A + B + C): %s",
-                tr_a5_ll$LABEL, fmt(tr_a5_ll$units), fmt(tr_a5_ll$comp), fmt(tr_a5_ll$prog), fmt(tr_a5_ll$stal), fmt(tr_a5_ll$older), cls5)
-g_wc5 <- "Working-class tracts (A + B + C)"
-m5 <- leaflet_base(bm_key = cpa_key(cc)) %>% fit_to(bd) %>%
-  addMapPane("wcTracts", zIndex = 350) %>%     # below the project dots, above the basemap
-  addPolygons(data = tr_a5_ll, fillColor = wc_pal(cls5), fillOpacity = 0.55, color = "#FFFFFF", weight = 0.3, group = g_wc5,
-              options = pathOptions(pane = "wcTracts", interactive = FALSE)) %>%
-  addPolygons(data = tr_a5_ll, fill = TRUE, fillColor = "#FFFFFF", fillOpacity = 0.15, color = "#555555", weight = 0.8,
-              label = lapply(lab5, HTML)) %>%
-  addLabelOnlyMarkers(data = tp_ll, label = fmt(tp_ll$units),
-                      labelOptions = labelOptions(noHide = TRUE, textOnly = TRUE, direction = "center", style = label_style)) %>%
-  addPolygons(data = to_ll(bd), fill = FALSE, color = "black", weight = 2.5,
-              options = pathOptions(interactive = FALSE))   # outline only: hover reaches the layer below
-for (stt in status_levels) {
-  d <- pts_cc %>% filter(status == stt)
-  if (nrow(d)) m5 <- m5 %>%
-    addCircleMarkers(data = d, radius = 1.6 + 1.1 * sqrt(d$units), stroke = TRUE, color = "#333333", weight = 0.3,
-                     fillColor = pal_status[[stt]], fillOpacity = 0.85, group = stt,
-                     label = sprintf("%s: %s unit(s), issued %s", stt, d$units, d$issue_year))
-}
-m5 <- m5 %>%
-  addLayersControl(overlayGroups = c(status_levels, g_wc5), options = layersControlOptions(collapsed = FALSE)) %>%
-  addLegend("bottomleft", colors = unname(wc_cols), labels = names(wc_cols), title = "Tract class (A + B + C)", opacity = 0.8, group = g_wc5) %>%
-  hideGroup(g_wc5) %>%
-  addLegend("bottomright", colors = unname(pal_status), labels = status_levels, title = "Status", opacity = 0.9)
-qa_add(7, paste0("ADU projects map has project points, ", cc), ">0", fmt(nrow(pts_cc)), nrow(pts_cc) > 0, stop_if_fail = TRUE)
-n_out_tr <- sum(a_cc$units[!(a_cc$ct20 %in% xw_cc$CT20)])
-tagList(tags$p(tags$b(paste0("ADU projects by status, ", cc))), m5,
-        tags$p(style = "font-size: 12px;",
-               paste0("One point per project at its parcel, sized by units; tick boxes to show or hide a status. Tick \"Working-class tracts (A + B + C)\" to shade the tracts by their class under the rule used in this analysis (working-class, other, or insufficient data). Tracts (clipped to the CPA) show total ADU units; hover for the status split, the separate count of older or unpermitted ADUs and the tract class.",
-                      if (n_out_tr > 0) sprintf(" %s units sit on parcels in the CPA whose tract is assigned to another CPA; they count in the CPA totals but in no tract here.", fmt(n_out_tr)) else "",
-                      " ", basemap_credit, ".")))
+            stal = sum(units[status == "Stalled"]), units_sf = sum(units[is_sfp]), units = sum(units), .groups = "drop")   # total last
 ```
 
 ### Community demographics
@@ -323,50 +327,24 @@ d1_cells(m_cc) %>%
 ```
 
 ```{r}
-# ---- Four tract maps ---------------------------------------------------------
+# ---- Homeownership change, 2015-2019 to 2020-2024 ---------------------------
+oc_cc <- own_chg_cpa %>% filter(cpa == cc)
+qa_add(7, paste0("Homeownership change table has every measure, ", cc), 11, nrow(oc_cc), nrow(oc_cc) == 11, stop_if_fail = TRUE)
+own_chg_table(oc_cc, caption = paste0("Homeownership change, 2015–2019 to 2020–2024, ", cc),
+              note = paste0("ACS 5-year estimates for 2015–2019 (", oc_cc$tracts10[1], " tracts on 2010 boundaries) and 2020–2024 (", oc_cc$tracts20[1],
+                            " tracts on 2020 boundaries), each assigned to the CPA when at least half of the tract lies inside it; the two tract sets cover nearly, not exactly, the same ground. ", own_chg_note))
+```
+
+```{r}
+# ---- Tract data for the layered map (the four separate tract maps were folded into it) ----
 tr_full <- tracts_sf %>% filter(CT20 %in% xw_cc$CT20) %>% left_join(d2_tract, by = "GEOID") %>% to_ll()
-mk_rate_map <- function(var, title) {
-  num <- tr_full[[paste0(var, "_num")]]; den <- tr_full[[paste0(var, "_den")]]
-  est <- tr_full[[paste0(var, "_est")]]; moe <- tr_full[[paste0(var, "_moe")]]; grey <- tr_full[[paste0(var, "_grey")]]
-  fill <- ifelse(grey, "#D9D9D9", d2_pal[[var]](est))
-  lab <- sprintf("<b>Tract %s</b><br>%s: %s<br>%s of %s households%s", tr_full$LABEL, title,
-                 ifelse(is.na(est), "n/a", paste0(fmt(100 * est, 1), "% ± ", fmt(100 * moe, 1))),
-                 fmt(num), fmt(den), ifelse(grey, "<br><i>Greyed: under 50 households in the group, or low reliability</i>", ""))
-  leaflet_base(height = 380, bm_key = cpa_key(cc)) %>% fit_to(tr_cc) %>%
-    addPolygons(data = tr_full, fillColor = fill, fillOpacity = 0.75, color = "#444444", weight = 0.6, label = lapply(lab, HTML)) %>%
-    addPolygons(data = to_ll(bd), fill = FALSE, color = "black", weight = 2.5,
-              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
-    addLegend("bottomright", pal = d2_pal[[var]], values = d2_domain[[var]], title = "Rate", opacity = 0.8,
-              labFormat = labelFormat(suffix = "%", transform = function(x) round(100 * x)))
-}
-wc_map <- function() {
-  cls <- tr_full$class_lab
-  leaflet_base(height = 380, bm_key = cpa_key(cc)) %>% fit_to(tr_cc) %>%
-    addPolygons(data = tr_full, fillColor = wc_pal(cls), fillOpacity = 0.75, color = "#444444", weight = 0.6,
-                label = lapply(wc_hover(tr_full, cls = cls), HTML)) %>%
-    addPolygons(data = to_ll(bd), fill = FALSE, color = "black", weight = 2.5,
-              options = pathOptions(interactive = FALSE)) %>%   # outline only: hover reaches the layer below
-    addLegend("bottomright", colors = wc_cols, labels = names(wc_cols), opacity = 0.8)
-}
-cell <- function(title, w) tags$div(style = "width: 49%; display: inline-block; vertical-align: top; margin-bottom: 8px;",
-                                    tags$div(style = "font-weight: bold; font-size: 13px;", title), w)
 qa_add(7, paste0("Tract maps have tracts, ", cc), nrow(xw_cc), nrow(tr_full), nrow(tr_full) == nrow(xw_cc), stop_if_fail = TRUE)
-tagList(
-  tags$p(tags$b(paste0("Tract maps, ", cc))),
-  cell("Homeownership rate", mk_rate_map("own", "Homeownership")),
-  cell("Black homeownership rate", mk_rate_map("blk", "Black homeownership")),
-  cell("Latino homeownership rate", mk_rate_map("lat", "Latino homeownership")),
-  cell("Working-class tracts", wc_map()),
-  tags$p(style = "font-size: 12px;",
-         paste0("Crosswalk tracts drawn in full (ACS describes whole tracts) with the CPA boundary on top. One color scale per measure, shared by all six CPAs. Hover for the rate ± margin of error, numerator and denominator; on the working-class map, hover for the three test values, each marked pass or fail. ",
-                "Homeownership rate = B25038_002 ÷ B25038_001; Black = B25003B_002 ÷ B25003B_001; Latino = B25003I_002 ÷ B25003I_001. ",
-                "Grey: the group has fewer than 50 households in the tract, or the rate is flagged low reliability (coefficient of variation over 30%). Working-class: tests A, B and C all pass; insufficient data: under 100 residents or no published median family income. ACS 2020–2024 5-year. ", basemap_credit, ".")))
 ```
 
 ```{r}
 # ---- Layered tract map: homeowners by group, with ADUs on top ----------------------
 ly <- tr_full %>% left_join(tstat, by = c("CT20" = "ct20")) %>%
-  mutate(across(c(units, comp, prog, stal), ~ coalesce(as.numeric(.x), 0)))
+  mutate(across(c(units, units_sf, comp, prog, stal), ~ coalesce(as.numeric(.x), 0)))
 hi_class <- function(g) {
   o <- ly$own_est >= lay_high; gg <- ly[[paste0(g, "_est")]] >= lay_high
   case_when(ly[[paste0(g, "_grey")]] | ly$own_grey ~ hh_levels[5], o & gg ~ hh_levels[1], o & !gg ~ hh_levels[2],
@@ -374,8 +352,11 @@ hi_class <- function(g) {
 }
 ly$hi_lat <- hi_class("lat"); ly$hi_blk <- hi_class("blk")
 adu_cut <- median(ly$units)                     # the middle tract of this CPA on ADU units
+adu_cut_sf <- median(ly$units_sf)               # the same middle tract, on units on single-family properties
 ly <- ly %>% mutate(many_adu = units >= adu_cut & units > 0,
-                    focus_lat = hi_lat == hh_levels[1] & many_adu, focus_blk = hi_blk == hh_levels[1] & many_adu)
+                    focus_lat = hi_lat == hh_levels[1] & many_adu, focus_blk = hi_blk == hh_levels[1] & many_adu,
+                    many_adu_sf = units_sf >= adu_cut_sf & units_sf > 0, many_adu_sf6 = units_sf >= pooled_cut_sf & units_sf > 0,
+                    focus_lat_sf = hi_lat == hh_levels[1] & many_adu_sf, focus_blk_sf = hi_blk == hh_levels[1] & many_adu_sf)
 qa_add(7, paste0("Layered tract map has every tract, ", cc), nrow(xw_cc), nrow(ly), nrow(ly) == nrow(xw_cc), stop_if_fail = TRUE)
 qa_add(7, paste0("Layered tract map: ADU units by tract sum to the units in the CPA's tracts, ", cc),
        fmt(sum(a_cc$units[a_cc$ct20 %in% xw_cc$CT20])), fmt(sum(ly$units)),
@@ -391,17 +372,44 @@ ly_cols <- list(
   lat = nmv(ifelse(ly$lat_grey, "#D9D9D9", d2_pal$lat(ly$lat_est))),
   blk = nmv(ifelse(ly$blk_grey, "#D9D9D9", d2_pal$blk(ly$blk_est))),
   hil = nmv(unname(hh_cols[ly$hi_lat])), hib = nmv(unname(hh_cols[ly$hi_blk])),
-  wc = nmv(unname(wc_cols[as.character(ly$class_lab)])), none = nmv(rep("#FFFFFF", nrow(ly))))
+  wc = nmv(unname(wc_cols[as.character(ly$class_lab)])), wch = nmv(unname(wc_cols[as.character(ly$class_hh)])),
+  incm = nmv(inc_col(ly$mfi_ratio)), inch = nmv(inc_col(ly$mhi_ratio)),
+  dlo = nmv(chg_col(ly$chg_lat_own, ly$sig_lat_own, chg_n_breaks)), dbo = nmv(chg_col(ly$chg_blk_own, ly$sig_blk_own, chg_n_breaks)),
+  dlr = nmv(chg_col(ly$chg_lat_rate, ly$sig_lat_rate, chg_s_breaks)), dbr = nmv(chg_col(ly$chg_blk_rate, ly$sig_blk_rate, chg_s_breaks)),
+  dls = nmv(chg_col(ly$chg_lat_shr, ly$sig_lat_shr, chg_s_breaks)), dbs = nmv(chg_col(ly$chg_blk_shr, ly$sig_blk_shr, chg_s_breaks)),
+  none = nmv(rep("#FFFFFF", nrow(ly))))
+ly_dash <- list(incm = nmv(ly$mfi_cross), inch = nmv(ly$mhi_cross))     # 90% range of the ratio crosses 1.00
+ly_inc <- function(v, r, m) ifelse(is.na(v), "not published", sprintf("$%s, ratio %s &plusmn; %s", fmt(v), fmt(r, 2), fmt(m, 2)))
+ly_chg <- function(g) {
+  e19 <- ly[[paste0("est19_", g, "_own")]]; e24 <- ly[[paste0("est24_", g, "_own")]]
+  d <- ly[[paste0("chg_", g, "_own")]]; dm <- ly[[paste0("chg_moe_", g, "_own")]]; sg <- ly[[paste0("sig_", g, "_own")]]
+  s19 <- ly[[paste0("est19_", g, "_shr")]]; s24 <- ly[[paste0("est24_", g, "_shr")]]
+  sd <- ly[[paste0("chg_", g, "_shr")]]; sm <- ly[[paste0("chg_moe_", g, "_shr")]]; ss <- ly[[paste0("sig_", g, "_shr")]]
+  r19 <- ly[[paste0("est19_", g, "_rate")]]; r24 <- ly[[paste0("est24_", g, "_rate")]]
+  rd <- ly[[paste0("chg_", g, "_rate")]]; rm <- ly[[paste0("chg_moe_", g, "_rate")]]; rs <- ly[[paste0("sig_", g, "_rate")]]
+  rate_txt <- ifelse(is.na(rd), "homeownership rate n/a",
+                     sprintf("homeownership rate %s &rarr; %s (%s%s &plusmn; %s pts%s)", pct(r19), pct(r24), ifelse(rd > 0, "+", ""), fmt(100 * rd, 1), fmt(100 * rm, 1),
+                             ifelse(rs, ", <b>significant</b>", ", within the margin")))
+  sprintf("%s; owners %s &rarr; %s (%s%s &plusmn; %s%s); share of owners %s &rarr; %s (%s%s &plusmn; %s pts%s)", rate_txt,
+          fmt(e19), fmt(e24), ifelse(d > 0, "+", ""), fmt(d), fmt(dm), ifelse(sg, "", ", within the margin"),
+          pct(s19), pct(s24), ifelse(sd > 0, "+", ""), fmt(100 * sd, 1), fmt(100 * sm, 1), ifelse(ss, "", ", within the margin"))
+}
 ly_pr <- function(e, m, g) ifelse(is.na(e), "n/a", paste0(fmt(100 * e, 1), "% ± ", fmt(100 * m, 1), ifelse(g, " (few households or unreliable)", "")))
 ly_hover <- sprintf(paste0("<b>Tract %s</b> · %s<br>",
                            "Households: %s · owners: %s · homeownership rate %s<br>",
                            "Latino households: %s · Latino owners: <b>%s</b> · rate %s<br>",
                            "Black households: %s · Black owners: <b>%s</b> · rate %s<br>",
-                           "ADU units: <b>%s</b> (completed %s, in progress %s, stalled %s)%s"),
+                           "ADU units: <b>%s</b> (completed %s, in progress %s, stalled %s; on single-family properties %s)<br>",
+                           "Median family income: %s &middot; median household income: %s<br>",
+                           "Tract class, county-median option: %s<br>",
+                           "Change 2015&ndash;2019 to 2020&ndash;2024%s: Latino %s<br>Black %s%s"),
                     ly$LABEL, ly$class_lab, fmt(ly$own_den), fmt(ly$own_num), ly_pr(ly$own_est, ly$own_moe, ly$own_grey),
                     fmt(ly$lat_den), fmt(ly$lat_num), ly_pr(ly$lat_est, ly$lat_moe, ly$lat_grey),
                     fmt(ly$blk_den), fmt(ly$blk_num), ly_pr(ly$blk_est, ly$blk_moe, ly$blk_grey),
-                    fmt(ly$units), fmt(ly$comp), fmt(ly$prog), fmt(ly$stal),
+                    fmt(ly$units), fmt(ly$comp), fmt(ly$prog), fmt(ly$stal), fmt(ly$units_sf),
+                    ly_inc(ly$mfi, ly$mfi_ratio, ly$mfi_ratio_moe), ly_inc(ly$mhi, ly$mhi_ratio, ly$mhi_ratio_moe), ly$class_hh,
+                    ifelse(ly$chg_n20 == 1 & ly$chg_n10 == 1, "", sprintf(" (group of %d tracts in 2020, %d in 2010)", ly$chg_n20, ly$chg_n10)),
+                    ly_chg("lat"), ly_chg("blk"),
                     ifelse(ly$focus_lat | ly$focus_blk,
                            paste0("<br><i>Focus tract: homeownership and ",
                                   ifelse(ly$focus_lat & ly$focus_blk, "Latino and Black", ifelse(ly$focus_lat, "Latino", "Black")),
@@ -414,27 +422,37 @@ mL <- leaflet_base(height = 680, bm_key = cpa_key(cc)) %>%
               color = "#555555", weight = 0.7, label = lapply(ly_hover, HTML)) %>%
   addPolygons(data = to_ll(bd), fill = FALSE, color = "black", weight = 2.5,
               options = pathOptions(interactive = FALSE))   # outline only: hover reaches the layer below
-if (any(ly$focus_lat)) mL <- mL %>%
-  addPolygons(data = ly[ly$focus_lat, ], fill = FALSE, color = "#D7191C", weight = 3.5, group = g_fl,
-              options = pathOptions(interactive = FALSE))
-if (any(ly$focus_blk)) mL <- mL %>%
-  addPolygons(data = ly[ly$focus_blk, ], fill = FALSE, color = "#7B3294", weight = 3.5, dashArray = "6,4", group = g_fb,
-              options = pathOptions(interactive = FALSE))
+sf_grpL <- list()      # layers the single-family control shows or hides, group by group
+add_focus <- function(m, a, b, grp, color, dash = NULL) {       # outlines for both versions, drawn once each
+  if (!any(a | b)) return(m)
+  d <- rbind(ly[a, ], ly[b, ])
+  sf_grpL[[grp]] <<- list(all = c(rep(1L, sum(a)), rep(0L, sum(b))), sf = c(rep(0L, sum(a)), rep(1L, sum(b))))
+  addPolygons(m, data = d, fill = FALSE, color = color, weight = 3.5, dashArray = dash, group = grp, options = pathOptions(interactive = FALSE))
+}
+mL <- mL %>% add_focus(ly$focus_lat, ly$focus_lat_sf, g_fl, "#D7191C") %>%
+  add_focus(ly$focus_blk, ly$focus_blk_sf, g_fb, "#7B3294", dash = "6,4")
 mL <- mL %>% addLabelOnlyMarkers(data = ctr_ly, label = fmt(ctr_ly$units), group = g_n,
                                  labelOptions = labelOptions(noHide = TRUE, textOnly = TRUE, direction = "center", style = label_style))
 for (stt in status_levels) {
   dpt <- pts_cc %>% filter(status == stt)
+  if (nrow(dpt)) sf_grpL[[paste0("ADUs: ", stt)]] <- list(all = rep(1L, nrow(dpt)), sf = as.integer(dpt$is_sfp))
   if (nrow(dpt)) mL <- mL %>%
     addCircleMarkers(data = dpt, radius = 1.6 + 1.1 * sqrt(dpt$units), stroke = TRUE, color = "#333333", weight = 0.3,
                      fillColor = pal_status[[stt]], fillOpacity = 0.85, group = paste0("ADUs: ", stt),
-                     label = sprintf("%s: %s unit(s), issued %s", stt, dpt$units, dpt$issue_year))
+                     label = sprintf("%s: %s unit(s), %s", stt, dpt$units, ifelse(is.na(dpt$issue_year), "grandfathered (Assessor record, no permit year)", paste("issued", dpt$issue_year))))
 }
 ov_ly <- c(paste0("ADUs: ", status_levels[status_levels %in% pts_cc$status]), g_n,
-           if (any(ly$focus_lat)) g_fl, if (any(ly$focus_blk)) g_fb)
+           if (any(ly$focus_lat | ly$focus_lat_sf)) g_fl, if (any(ly$focus_blk | ly$focus_blk_sf)) g_fb)
 mL <- mL %>%
   addLayersControl(overlayGroups = ov_ly, position = "topleft", options = layersControlOptions(collapsed = FALSE)) %>%
   hideGroup(g_n) %>%
-  onRender(lay_js, data = list(cols = ly_cols, legends = lay_legends))
+  onRender(lay_js, data = list(cols = ly_cols, legends = lay_legends, dash = ly_dash)) %>%
+  onRender(sf_toggle_js, data = list(groups = sf_grpL, position = "topleft",
+                                     labels = list(group = g_n, all = fmt(ctr_ly$units), sf = fmt(ctr_ly$units_sf))))
+qa_add(7, paste0("Layered tract map: single-family focus tracts have both rates at 50% or more and single-family units at or above the CPA's middle tract, ", cc),
+       "all", "checked", all(ly$units_sf[ly$focus_lat_sf | ly$focus_blk_sf] >= adu_cut_sf) && all(ly$own_est[ly$focus_lat_sf | ly$focus_blk_sf] >= 0.5), stop_if_fail = TRUE)
+qa_add(7, paste0("Layered tract map: every tract has an income band or is marked not published, both measures, ", cc), nrow(ly),
+       sum(!is.na(inc_col(ly$mfi_ratio)) & !is.na(inc_col(ly$mhi_ratio))), all(!is.na(inc_col(ly$mfi_ratio))), stop_if_fail = TRUE)
 n_fl <- sum(ly$focus_lat); n_fb <- sum(ly$focus_blk)
 tr_word <- function(n) if (n == 0) "no tracts" else if (n == 1) "1 tract" else paste(n, "tracts")
 ly_tab <- ly %>% st_drop_geometry() %>% arrange(desc(lat_num + blk_num)) %>%
@@ -443,18 +461,32 @@ ly_tab <- ly %>% st_drop_geometry() %>% arrange(desc(lat_num + blk_num)) %>%
             `Latino owner households` = fmt(lat_num), `Latino homeownership rate` = ifelse(lat_grey, "few", paste0(fmt(100 * lat_est, 1), "%")),
             `Black owner households` = fmt(blk_num), `Black homeownership rate` = ifelse(blk_grey, "few", paste0(fmt(100 * blk_est, 1), "%")),
             `ADU units` = fmt(units),
-            `Focus tract` = case_when(focus_lat & focus_blk ~ "Latino and Black", focus_lat ~ "Latino", focus_blk ~ "Black", TRUE ~ "")) %>%
-  kable(format = "html", align = c("l", "l", rep("r", 7), "l")) %>%
+            `Focus tract` = case_when(focus_lat & focus_blk ~ "Latino and Black", focus_lat ~ "Latino", focus_blk ~ "Black", TRUE ~ ""),
+            `ADU units on single-family properties` = fmt(units_sf),
+            `At or above the middle tract on single-family units (this CPA / six CPAs pooled)` = paste(ifelse(many_adu_sf, "yes", "no"), ifelse(many_adu_sf6, "yes", "no"), sep = " / "),
+            `Focus tract, single-family units` = case_when(focus_lat_sf & focus_blk_sf ~ "Latino and Black", focus_lat_sf ~ "Latino", focus_blk_sf ~ "Black", TRUE ~ ""),
+            `Family income ÷ metro median` = ifelse(is.na(mfi_ratio), "n/a", fmt(mfi_ratio, 2)),
+            `Household income ÷ county median` = ifelse(is.na(mhi_ratio), "n/a", fmt(mhi_ratio, 2)),
+            `Change in Latino homeownership rate (points)` = ifelse(is.na(chg_lat_rate), "n/a", paste0(fmt(100 * chg_lat_rate, 1), ifelse(sig_lat_rate, "*", ""))),
+            `Change in Black homeownership rate (points)` = ifelse(is.na(chg_blk_rate), "n/a", paste0(fmt(100 * chg_blk_rate, 1), ifelse(sig_blk_rate, "*", ""))),
+            `Change in Latino owner households` = paste0(fmt(chg_lat_own), ifelse(sig_lat_own, "*", "")),
+            `Change in Black owner households` = paste0(fmt(chg_blk_own), ifelse(sig_blk_own, "*", "")),
+            `Change in Latino share of owners (points)` = paste0(fmt(100 * chg_lat_shr, 1), ifelse(sig_lat_shr, "*", "")),
+            `Change in Black share of owners (points)` = paste0(fmt(100 * chg_blk_shr, 1), ifelse(sig_blk_shr, "*", ""))) %>%
+  kable(format = "html", align = c("l", "l", rep("r", 7), "l", "r", "l", "l", rep("r", 8))) %>%
   kable_styling(bootstrap_options = c("striped", "condensed"), full_width = FALSE, font_size = 12)
 tagList(
   tags$p(tags$b(paste0("Homeowners and ADUs by tract, one layered map, ", cc))), mL,
   tags$p(style = "font-size: 12px;",
          paste0("Choose what the tracts are shaded by in the menu at top right; tick ADU layers and focus-tract outlines at top left; hover over a tract for every number at once. The map opens on Latino owner households with the ADU projects on top. ",
+                "Tick \"Single-family properties only\" (top left) and the ADU dots, the units-per-tract labels and the focus-tract outlines all switch to units on single-family properties (middle tract: ", fmt(adu_cut_sf), " such units in this CPA; ", fmt(pooled_cut_sf), " across the six CPAs pooled). ",
+                "Income layers: tract median family income ÷ the metro median ($", fmt(metro_mfi), ") and tract median household income ÷ the county median ($", fmt(county_mhi), "), in six bands; a dashed outline marks tracts whose 90% range crosses 1.00 (the margin treats the metro or county median as fixed). \"Working-class tracts, county-median option\" applies tests A and B with household income against the county median for test C. ",
+                "The two \"Change in ... homeownership rate\" layers show where a group's homeownership rate (the group's owner households ÷ the group's households) moved between the two ACS periods: tracts are colored only where the change is larger than its margin of error, and grey where it is not. Change layers compare 2015–2019 with 2020–2024 for the tract, or for the smallest group of tracts that matches in both years where boundaries changed; grey = the change is within its 90% margin of error. In the table, * marks a change larger than its margin. ",
                 "Counts are Latino or Black owner-occupied households in the tract (B25003I_002, B25003B_002). Rates are owner households ÷ households, for everyone and within each group; a group's rate is grey where the group has under 50 households in the tract or the rate is low reliability. Count and rate color scales are shared by all six CPAs. ",
                 "The two \"50%+\" layers sort tracts by whether the overall homeownership rate and the group's rate are each 50% or more. ",
                 "Focus tracts have both of those rates at 50% or more and ADU units at or above this CPA's middle tract (", fmt(adu_cut), " units or more): ",
                 tr_word(n_fl), " for Latino owners (red outline) and ", tr_word(n_fb), " for Black owners (purple dashed outline). ",
-                "ACS 2020–2024 5-year; ADU projects ", window_label, ", one dot per project, sized by units. ", basemap_credit, ".")),
+                "ACS 2020–2024 5-year, with 2015–2019 for the change layers; ", window_label, ", one dot per ADU, sized by units. ", basemap_credit, ".")),
   tags$details(style = "margin-bottom: 14px;",
                tags$summary(style = "font-size: 13px; cursor: pointer;", "Show the numbers behind the map (sorted by Latino plus Black owner households)"),
                HTML(as.character(ly_tab))))
@@ -469,6 +501,7 @@ res3 <- d3_build(tc_cc)
 adu_in <- a_cc %>% filter(tract_cpa %in% cc)
 prop_in <- st_drop_geometry(p_cc) %>% filter(tract_cpa %in% cc)
 d4 <- d4_build(tc_cc, adu_in, prop_in)
+d4_sf <- d4_build(tc_cc, adu_in, prop_in, sf_only = TRUE)
 n_left_parcels <- sum(!(st_drop_geometry(p_cc)$tract_cpa %in% cc))
 n_left_units <- sum(a_cc$units[!(a_cc$tract_cpa %in% cc)]) + 0
 n_wc <- sum(tc_cc$class == "Working-class"); n_oth <- sum(tc_cc$class == "Other"); n_ins <- sum(tc_cc$class == "Insufficient data")
@@ -483,11 +516,13 @@ qa_add(7, paste0("Working-class tables built with the confirmed rule, ", cc), "t
 d3_table(res3, caption = paste0("Demographics of working-class and other tracts, ", cc),
          note = paste("ACS 2020–2024 5-year. Group values come from counts summed over each group's tracts, never from averaging tract rates. MOE = 90% margin of error (shares in percentage points); † = low reliability.",
                       "The class describes a tract's residents, not the owner of any ADU in it."))
-d4_table(d4) %>%
-  tbl(caption = paste0("ADUs in working-class and other tracts, ", cc),
-      note = paste0("ADU projects and lots on parcels inside the CPA whose tract is assigned to this CPA. ",
+d4_note <- function(sf) paste0(if (sf) "Single-family version: ADU units on single-family properties, per 100 single-family eligible lots, so both sides of the ratio count the same kind of lot. " else "",
+                    "ADU projects and lots on parcels inside the CPA whose tract is assigned to this CPA. ",
                     fmt(n_left_parcels), " parcels in the CPA lie in tracts assigned elsewhere (", fmt(n_left_units),
-                    " ADU units); they count in every CPA total but not here. ", grp_note,
-                    " The class describes a tract's residents, not the owner of any ADU in it."),
-      align = c("l", rep("r", 4)))
+                    " ADU units); they count in every CPA total but not here. Tier B: lots of 4,500 sq ft or more; tier C: tier B less lots flagged hillside-fire. ", grp_note,
+                    " The class describes a tract's residents, not the owner of any ADU in it.")
+qa_add(7, paste0("ADUs in working-class and other tracts: single-family units do not exceed all units in any group, ", cc), "holds", "checked",
+       all(d4_sf$units <= d4$units) && all(d4_sf$eligB <= d4$eligB), stop_if_fail = TRUE)
+sf_switch(d4_table(d4) %>% tbl(caption = paste0("ADUs in working-class and other tracts, ", cc, ", all properties"), note = d4_note(FALSE), align = c("l", rep("r", 4))),
+          d4_table(d4_sf, sf_only = TRUE) %>% tbl(caption = paste0("ADUs in working-class and other tracts, ", cc, ", single-family properties only"), note = d4_note(TRUE), align = c("l", rep("r", 4))))
 ```
